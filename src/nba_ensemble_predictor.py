@@ -3,11 +3,11 @@ Ensemble NBA Predictor
 ======================
 Trains multiple models and combines their predictions for better accuracy.
 
-Strategy: Train XGBoost + LightGBM + Logistic Regression + LSTM, then use ensemble voting.
+Strategy: Train XGBoost + Random Forest + Logistic Regression + LSTM, then use ensemble voting.
 This typically improves accuracy by 2-4%.
 
 Requirements:
-pip install xgboost lightgbm tqdm
+pip install xgboost tqdm
 
 Usage:
     python -m src.nba_ensemble_predictor
@@ -22,6 +22,7 @@ from tensorflow import keras
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
 from .nba_data_manager import NBADataManager, NBADataFetcher
 from .nba_predictor import NBAPredictor
@@ -31,7 +32,6 @@ from .paths import (
     ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE
 )
 import xgboost as xgb
-import lightgbm as lgb
 from tqdm import tqdm
 
 # GPU Configuration - use GPU when available
@@ -124,16 +124,16 @@ def save_classification_reports(model_reports, architectures):
     
     return report_file
 
-def train_ensemble_models(matchup_df, n_models=4, architectures=['xgboost', 'lightgbm', 'logistic', 'lstm']):
+def train_ensemble_models(matchup_df, n_models=4, architectures=['xgboost', 'random_forest', 'logistic', 'lstm']):
     """
     Train multiple models with different configurations
     
     Args:
         matchup_df: Training data
-        n_models: Number of models to train (default 4: XGBoost + LightGBM + Logistic + LSTM)
+        n_models: Number of models to train (default 4: XGBoost + Random Forest + Logistic + LSTM)
         architectures: List of architectures to use
             - 'xgboost': Gradient boosted trees (optimized hyperparams)
-            - 'lightgbm': LightGBM gradient boosting (faster, often better)
+            - 'random_forest': Random Forest ensemble (robust, good feature importance)
             - 'logistic': L2-regularized Logistic Regression (linear baseline)
             - 'lstm': LSTM for sequential/temporal patterns
             - 'deep': Deep MLP (256→512→256→128→64→32)
@@ -242,51 +242,41 @@ def train_ensemble_models(matchup_df, n_models=4, architectures=['xgboost', 'lig
             model = lr_model
             model_types.append('logistic')
         
-        elif architecture == 'lightgbm':
-            # Train LightGBM - often faster and more accurate than XGBoost
-            print("Training LightGBM classifier...")
+        elif architecture == 'random_forest':
+            # Train Random Forest - robust ensemble with good feature importance
+            print("Training Random Forest classifier...")
             
             # Create sample weights - give more weight to recent games
             # Exponential decay: newest games get weight 1.0, oldest get ~0.3
             n_train = len(y_train)
             sample_weights = np.exp(np.linspace(-1.2, 0, n_train))  # Exponential decay
             
-            lgb_model = lgb.LGBMClassifier(
-                n_estimators=1500,
-                max_depth=4,  # Slightly deeper than XGBoost
-                learning_rate=0.02,
-                num_leaves=15,  # 2^4 - 1 for max_depth=4
-                subsample=0.8,
-                colsample_bytree=0.9,
-                reg_alpha=0.5,  # L1 regularization
-                reg_lambda=1.5,  # L2 regularization
-                min_child_weight=5,
-                min_child_samples=20,
-                objective='binary',
-                boosting_type='gbdt',
+            rf_model = RandomForestClassifier(
+                n_estimators=500,
+                max_depth=8,
+                min_samples_split=10,
+                min_samples_leaf=5,
+                max_features='sqrt',
+                bootstrap=True,
+                oob_score=True,  # Out-of-bag score for validation
+                class_weight='balanced',
                 random_state=42 + i,
                 n_jobs=-1,
-                verbose=-1  # Suppress LightGBM warnings
+                verbose=0
             )
             
-            # Train with validation and sample weights
-            lgb_model.fit(
-                X_train_scaled, y_train,
-                sample_weight=sample_weights,
-                eval_set=[(X_test_scaled, y_test)],
-                eval_metric='logloss',
-                callbacks=[
-                    lgb.early_stopping(stopping_rounds=50, verbose=False),
-                    lgb.log_evaluation(period=100)
-                ]
-            )
+            # Train with sample weights
+            rf_model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
             
             # Evaluate
-            y_pred_prob = lgb_model.predict_proba(X_test_scaled)[:, 1]
+            y_pred_prob = rf_model.predict_proba(X_test_scaled)[:, 1]
             y_pred = (y_pred_prob > 0.5).astype(int)
             
-            model = lgb_model
-            model_types.append('lightgbm')
+            # Print OOB score
+            print(f"  Out-of-bag score: {rf_model.oob_score_:.4f}")
+            
+            model = rf_model
+            model_types.append('random_forest')
         
         else:
             # Train neural network model (LSTM or deep MLP)
@@ -391,7 +381,7 @@ def train_ensemble_models(matchup_df, n_models=4, architectures=['xgboost', 'lig
         raw_probs = []
         for model, scaler, mtype in zip(models, scalers, model_types):
             Xs = scaler.transform(X_meta_val)
-            if mtype in ('xgboost', 'logistic', 'lightgbm'):
+            if mtype in ('xgboost', 'logistic', 'random_forest'):
                 p = model.predict_proba(Xs)[:, 1]
             else:
                 p = model.predict(Xs, verbose=0).reshape(-1)
@@ -438,7 +428,7 @@ def predict_with_ensemble(models, scalers, feature_cols, matchup_df, game_idx, m
     Predict using ensemble (average of all models)
     
     Args:
-        models: List of trained models (XGBoost, LightGBM, Logistic, Keras)
+        models: List of trained models (XGBoost, Random Forest, Logistic, Keras)
         scalers: List of scalers
         feature_cols: Feature column names
         matchup_df: Data with game to predict
@@ -454,7 +444,7 @@ def predict_with_ensemble(models, scalers, feature_cols, matchup_df, game_idx, m
     for model, scaler, model_type in zip(models, scalers, model_types):
         features_scaled = scaler.transform(game_features)
         
-        if model_type in ('xgboost', 'logistic', 'lightgbm'):
+        if model_type in ('xgboost', 'logistic', 'random_forest'):
             pred = model.predict_proba(features_scaled)[0][1]
         else:  # keras
             pred = model.predict(features_scaled, verbose=0)[0][0]
@@ -501,9 +491,9 @@ def evaluate_ensemble(models, scalers, feature_cols, matchup_df, model_types):
         if model_type == 'xgboost':
             preds = model.predict_proba(X_test_scaled)[:, 1]
             model_names.append('XGBoost')
-        elif model_type == 'lightgbm':
+        elif model_type == 'random_forest':
             preds = model.predict_proba(X_test_scaled)[:, 1]
-            model_names.append('LightGBM')
+            model_names.append('RF')
         elif model_type == 'logistic':
             preds = model.predict_proba(X_test_scaled)[:, 1]
             model_names.append('Logistic')
@@ -567,10 +557,11 @@ def save_ensemble(models, scalers, feature_cols, model_types):
                     print(f"✓ Saved XGBoost model {i+1}")
                 except Exception as e:
                     print(f"❌ Failed to save XGBoost model {i+1}: {e}")
-        elif model_type == 'lightgbm':
-            # Save LightGBM model
-            model.booster_.save_model(get_model_path(f'nba_ensemble_lightgbm_{i+1}.txt'))
-            print(f"✓ Saved LightGBM model {i+1}")
+        elif model_type == 'random_forest':
+            # Save Random Forest model
+            with open(get_model_path(f'nba_ensemble_rf_{i+1}.pkl'), 'wb') as f:
+                pickle.dump(model, f)
+            print(f"✓ Saved Random Forest model {i+1}")
         else:  # keras
             model.save(get_model_path(f'nba_ensemble_model_{i+1}.keras'))
             print(f"✓ Saved Keras model {i+1}")
@@ -606,11 +597,11 @@ def main():
     
     print(f"✓ Prepared {len(matchup_df)} matchups")
     
-    # Train ensemble (XGBoost + LightGBM + Logistic + LSTM)
+    # Train ensemble (XGBoost + Random Forest + Logistic + LSTM)
     models, scalers, feature_cols, model_types = train_ensemble_models(
         matchup_df,
         n_models=4,
-        architectures=['xgboost', 'lightgbm', 'logistic', 'lstm']
+        architectures=['xgboost', 'random_forest', 'logistic', 'lstm']
     )
     
     # Evaluate ensemble
@@ -626,7 +617,7 @@ def main():
     print("="*70)
     print("\nEnsemble composition:")
     print("  1. XGBoost (optimized gradient boosted trees)")
-    print("  2. LightGBM (fast gradient boosting with sample weighting)")
+    print("  2. Random Forest (robust ensemble with OOB validation)")
     print("  3. Logistic Regression (linear baseline, well-calibrated)")
     print("  4. LSTM (attention-enhanced neural network)")
     print("\nNew features included:")

@@ -7,7 +7,7 @@ Entry point script for making predictions on today's games.
 Usage:
     python predict.py                          # Ensemble predictions for today
     python predict.py --model xgboost          # Use only XGBoost
-    python predict.py --model lightgbm         # Use only LightGBM  
+    python predict.py --model rf               # Use only Random Forest  
     python predict.py --model logistic         # Use only Logistic Regression
     python predict.py --model lstm             # Use only LSTM
     python predict.py --model ensemble         # Use full ensemble (default)
@@ -36,7 +36,7 @@ Examples:
     )
     parser.add_argument(
         '--model', '-m',
-        choices=['xgboost', 'lightgbm', 'logistic', 'lstm', 'ensemble'],
+        choices=['xgboost', 'rf', 'random_forest', 'logistic', 'lstm', 'ensemble'],
         default='ensemble',
         help='Model to use for predictions (default: ensemble)'
     )
@@ -49,14 +49,19 @@ Examples:
     
     args = parser.parse_args()
     
-    if args.model == 'ensemble':
+    # Map rf alias to random_forest
+    model = args.model
+    if model == 'rf':
+        model = 'random_forest'
+    
+    if model == 'ensemble':
         # Use full ensemble
         from src.predict_with_ensemble import main as ensemble_main
         ensemble_main()
     else:
         # Use single model prediction
         from src.predict_with_ensemble import predict_with_single_model
-        predict_with_single_model(args.model, args.matchup)
+        predict_with_single_model(model, args.matchup)
 
 
 if __name__ == "__main__":

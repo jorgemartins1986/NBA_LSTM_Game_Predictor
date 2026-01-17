@@ -6,6 +6,5 @@ tensorflow
 matplotlib
 seaborn
 xgboost
-lightgbm
 joblib
 tqdm

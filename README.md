@@ -10,7 +10,7 @@ An ensemble-based NBA game prediction system combining multiple models with stac
 | Model | Type | Accuracy | Purpose |
 |-------|------|----------|---------|
 | XGBoost | Gradient Boosting | 64.21% | Tree-based learner with tuned hyperparameters |
-| LightGBM | Gradient Boosting | 63.68% | Fast, efficient gradient boosting |
+| Random Forest | Ensemble Trees | 63.50% | Robust ensemble with good generalization |
 | Logistic Regression | Linear | 62.78% | L2-regularized baseline with balanced class weights |
 | LSTM | Neural Network | 64.82% | Attention-enhanced deep learning |
 
@@ -42,7 +42,7 @@ python predict.py
 
    🤖 Model Agreement: 94%
       XGBoost:    72.1%
-      LightGBM:   70.3%
+      RF:         70.3%
       Logistic:   69.8%
       LSTM:       71.5%
 
@@ -75,7 +75,7 @@ NBA_LSTM_Game_Predictor/
 │
 ├── models/                       # Trained models (git-ignored)
 │   ├── nba_ensemble_xgboost_1.json
-│   ├── nba_ensemble_lightgbm_2.txt
+│   ├── nba_ensemble_rf_2.pkl
 │   ├── nba_ensemble_logistic_3.pkl
 │   ├── nba_ensemble_model_4.keras
 │   └── ensemble_*.pkl            # Scalers, features, meta-model
@@ -113,7 +113,7 @@ python train.py
 This will:
 1. Load/update game data from cache (or download if first run)
 2. Prepare matchup features with chronological split (80% train / 20% test)
-3. Train all 4 models: XGBoost, LightGBM, Logistic Regression, LSTM
+3. Train all 4 models: XGBoost, Random Forest, Logistic Regression, LSTM
 4. Apply sample weighting (recent games weighted more heavily)
 5. Build stacking meta-model and Platt calibrator
 6. Save all artifacts to `models/`
@@ -221,16 +221,14 @@ python predict_with_ensemble.py
 ## 📈 Improving Accuracy
 
 ### Feature Ideas (not yet implemented)
-- Rest days between games
 - Travel distance / timezone changes
 - Injury reports integration
-- Head-to-head historical matchups
 - Referee tendencies
 
 ### Model Ideas
-- Add LightGBM for more tree diversity
-- LSTM for sequential game patterns
 - Transformer attention on recent games
+- Gradient boosting hyperparameter tuning
+- Alternative neural network architectures
 
 ---
 

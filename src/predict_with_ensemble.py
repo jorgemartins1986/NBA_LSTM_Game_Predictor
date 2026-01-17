@@ -1,7 +1,7 @@
 """
 Predict Today's Games Using Ensemble
 ====================================
-Uses the trained ensemble (XGBoost + LightGBM + Logistic + LSTM) to predict NBA games.
+Uses the trained ensemble (XGBoost + Random Forest + Logistic + LSTM) to predict NBA games.
 
 Usage:
     python -m src.predict_with_ensemble
@@ -13,7 +13,6 @@ import pickle
 import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
-import lightgbm as lgb
 from nba_api.live.nba.endpoints import scoreboard
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.static import teams
@@ -54,9 +53,10 @@ def load_ensemble():
             models.append(model)
             loaded_types.append(model_type)
             loaded_indices.append(i)
-        elif model_type == 'lightgbm':
-            model = lgb.Booster(model_file=get_model_path(f'nba_ensemble_lightgbm_{i+1}.txt'))
-            print(f"✓ Loaded LightGBM model {i+1}")
+        elif model_type == 'random_forest':
+            with open(get_model_path(f'nba_ensemble_rf_{i+1}.pkl'), 'rb') as f:
+                model = pickle.load(f)
+            print(f"✓ Loaded Random Forest model {i+1}")
             models.append(model)
             loaded_types.append(model_type)
             loaded_indices.append(i)
@@ -234,11 +234,8 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
     for model, scaler, model_type in zip(models, scalers, model_types):
         features_scaled = scaler.transform(features)
         
-        if model_type in ('xgboost', 'logistic'):
+        if model_type in ('xgboost', 'logistic', 'random_forest'):
             pred = model.predict_proba(features_scaled)[0][1]
-        elif model_type == 'lightgbm':
-            # LightGBM Booster returns raw scores, need to convert to probability
-            pred = model.predict(features_scaled)[0]
         else:  # keras
             pred = model.predict(features_scaled, verbose=0)[0][0]
         
@@ -302,7 +299,7 @@ def main(single_model=None):
     """Main prediction function
     
     Args:
-        single_model: If specified, use only this model ('lstm', 'xgboost', 'lightgbm', 'logistic')
+        single_model: If specified, use only this model ('lstm', 'xgboost', 'random_forest', 'logistic')
                       If None, use full ensemble
     """
     print("="*70)
@@ -310,7 +307,7 @@ def main(single_model=None):
         print(f"NBA GAME PREDICTIONS - {single_model.upper()} ONLY")
     else:
         print("NBA GAME PREDICTIONS - ENSEMBLE MODE")
-        print("XGBoost + LightGBM + Logistic + LSTM")
+        print("XGBoost + Random Forest + Logistic + LSTM")
     print("="*70)
     
     # Load ensemble
@@ -418,7 +415,7 @@ def main(single_model=None):
             # Map model types to display names
             model_type_labels = {
                 'xgboost': 'XGBoost',
-                'lightgbm': 'LightGBM', 
+                'random_forest': 'RF', 
                 'logistic': 'Logistic',
                 'keras': 'LSTM'
             }
@@ -493,7 +490,7 @@ def predict_with_single_model(model_name, matchup=None):
     """Wrapper function for single model predictions from CLI
     
     Args:
-        model_name: Model to use ('xgboost', 'lightgbm', 'logistic', 'lstm')
+        model_name: Model to use ('xgboost', 'random_forest', 'logistic', 'lstm')
         matchup: Optional tuple of (away_team, home_team) abbreviations
     """
     # Map lstm to keras (internal name)
@@ -501,7 +498,7 @@ def predict_with_single_model(model_name, matchup=None):
         model_name = 'keras'
     
     display_names = {'keras': 'LSTM', 'xgboost': 'XGBoost', 
-                     'lightgbm': 'LightGBM', 'logistic': 'Logistic'}
+                     'random_forest': 'Random Forest', 'logistic': 'Logistic'}
     print(f"🎯 Using SINGLE MODEL: {display_names.get(model_name, model_name.upper())}")
     
     main(single_model=model_name)
@@ -517,19 +514,22 @@ if __name__ == "__main__":
         # Map aliases
         if arg == 'lstm':
             arg = 'keras'  # LSTM is stored as 'keras' type
-        if arg in ['keras', 'xgboost', 'lightgbm', 'logistic']:
+        if arg == 'rf':
+            arg = 'random_forest'  # RF alias
+        if arg in ['keras', 'xgboost', 'random_forest', 'logistic']:
             single_model = arg
             display_names = {'keras': 'LSTM', 'xgboost': 'XGBoost', 
-                           'lightgbm': 'LightGBM', 'logistic': 'Logistic'}
+                           'random_forest': 'Random Forest', 'logistic': 'Logistic'}
             print(f"🎯 Using SINGLE MODEL: {display_names.get(arg, arg.upper())}")
         elif arg == '--help' or arg == '-h':
             print("Usage: python predict_with_ensemble.py [model]")
             print("\nOptions:")
-            print("  (no args)  - Use full ensemble (XGBoost + LightGBM + Logistic + LSTM)")
-            print("  lstm       - Use only LSTM model")
-            print("  xgboost    - Use only XGBoost model")
-            print("  lightgbm   - Use only LightGBM model")
-            print("  logistic   - Use only Logistic Regression model")
+            print("  (no args)     - Use full ensemble (XGBoost + RF + Logistic + LSTM)")
+            print("  lstm          - Use only LSTM model")
+            print("  xgboost       - Use only XGBoost model")
+            print("  random_forest - Use only Random Forest model")
+            print("  rf            - Alias for random_forest")
+            print("  logistic      - Use only Logistic Regression model")
             sys.exit(0)
     
     main(single_model=single_model)
