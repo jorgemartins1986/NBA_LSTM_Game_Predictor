@@ -234,7 +234,16 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
     for model, scaler, model_type in zip(models, scalers, model_types):
         features_scaled = scaler.transform(features)
         
-        if model_type in ('xgboost', 'logistic', 'random_forest'):
+        if model_type == 'xgboost':
+            pred = model.predict_proba(features_scaled)[0][1]
+        elif model_type == 'random_forest':
+            # Use top features if feature selection was applied
+            if hasattr(model, '_top_feature_indices'):
+                features_rf = features_scaled[:, model._top_feature_indices]
+            else:
+                features_rf = features_scaled
+            pred = model.predict_proba(features_rf)[0][1]
+        elif model_type == 'logistic':
             pred = model.predict_proba(features_scaled)[0][1]
         else:  # keras
             pred = model.predict(features_scaled, verbose=0)[0][0]
