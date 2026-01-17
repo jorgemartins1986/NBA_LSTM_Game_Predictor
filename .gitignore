@@ -34,3 +34,5 @@ reports/
 
 # Jupyter
 .ipynb_checkpoints/
+# LSTM Sequential experiments (side project - not part of main codebase)
+_lstm_experiments/
