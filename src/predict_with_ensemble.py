@@ -17,7 +17,7 @@ import lightgbm as lgb
 from nba_api.live.nba.endpoints import scoreboard
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.static import teams
-from .nba_predictor import FeatureEngineering
+from .nba_predictor import FeatureEngineering, SumPooling1D
 from .paths import (
     get_model_path,
     ENSEMBLE_TYPES_FILE, ENSEMBLE_SCALERS_FILE, ENSEMBLE_FEATURES_FILE,
@@ -36,8 +36,9 @@ def load_ensemble():
     with open(ENSEMBLE_TYPES_FILE, 'rb') as f:
         model_types = pickle.load(f)
     
-    # Custom objects for Lambda layer deserialization
+    # Custom objects for model deserialization
     custom_objects = {
+        'SumPooling1D': SumPooling1D,
         'reduce_sum_axis1': lambda x: tf.reduce_sum(x, axis=1)
     }
     

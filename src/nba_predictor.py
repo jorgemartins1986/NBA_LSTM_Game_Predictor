@@ -39,6 +39,21 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
+
+# Custom layer for sum pooling (properly serializable, unlike Lambda)
+@keras.utils.register_keras_serializable(package="Custom", name="SumPooling1D")
+class SumPooling1D(layers.Layer):
+    """Sum pooling over the time/sequence dimension (axis=1)"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def call(self, inputs):
+        return tf.reduce_sum(inputs, axis=1)
+    
+    def get_config(self):
+        return super().get_config()
+
+
 # Path configuration
 from .paths import FEATURE_CACHE_FILE, MATCHUP_CACHE_FILE, get_model_path
 
@@ -640,11 +655,8 @@ class NBAPredictor:
             
             # Apply attention
             context = layers.Multiply()([lstm2, attention])
-            # Sum over timesteps with explicit output_shape for serialization
-            context = layers.Lambda(
-                lambda x: tf.reduce_sum(x, axis=1),
-                output_shape=lambda s: (s[0], s[2])
-            )(context)
+            # Sum over timesteps using custom serializable layer
+            context = SumPooling1D()(context)
             
             # Also add global pooling paths
             avg_pool = layers.GlobalAveragePooling1D()(lstm2)
