@@ -1,0 +1,36 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache files (data caches - regenerated automatically)
+cache/
+*.csv
+!requirements.txt
+
+# Models (trained models - large binary files)
+models/
+*.keras
+*.pkl
+*.json
+!config/best_xgb_params.json
+
+# Reports (generated during training)
+reports/
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/

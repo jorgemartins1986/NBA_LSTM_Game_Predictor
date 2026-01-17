@@ -1,0 +1,479 @@
+"""
+Predict Today's Games Using Ensemble
+====================================
+Uses the trained ensemble (XGBoost + LightGBM + Logistic + LSTM) to predict NBA games.
+
+Usage:
+    python -m src.predict_with_ensemble
+"""
+
+import pandas as pd
+import numpy as np
+import pickle
+from tensorflow import keras
+import xgboost as xgb
+import lightgbm as lgb
+from nba_api.live.nba.endpoints import scoreboard
+from nba_api.stats.endpoints import leaguegamefinder
+from nba_api.stats.static import teams
+from .nba_predictor import FeatureEngineering
+from .paths import (
+    get_model_path,
+    ENSEMBLE_TYPES_FILE, ENSEMBLE_SCALERS_FILE, ENSEMBLE_FEATURES_FILE,
+    ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE, ENSEMBLE_WEIGHTS_FILE
+)
+
+
+def load_ensemble():
+    """Load all ensemble models and artifacts"""
+    print("📥 Loading ensemble models...")
+    
+    # Load model types
+    with open(ENSEMBLE_TYPES_FILE, 'rb') as f:
+        model_types = pickle.load(f)
+    
+    # Load models based on type
+    models = []
+    for i, model_type in enumerate(model_types):
+        if model_type == 'xgboost':
+            model = xgb.XGBClassifier()
+            model.load_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
+            print(f"✓ Loaded XGBoost model {i+1}")
+        elif model_type == 'lightgbm':
+            model = lgb.Booster(model_file=get_model_path(f'nba_ensemble_lightgbm_{i+1}.txt'))
+            print(f"✓ Loaded LightGBM model {i+1}")
+        elif model_type == 'logistic':
+            with open(get_model_path(f'nba_ensemble_logistic_{i+1}.pkl'), 'rb') as f:
+                model = pickle.load(f)
+            print(f"✓ Loaded Logistic Regression model {i+1}")
+        else:  # keras
+            model = keras.models.load_model(get_model_path(f'nba_ensemble_model_{i+1}.keras'))
+            print(f"✓ Loaded Keras model {i+1}")
+        models.append(model)
+    
+    # Load scalers and features
+    with open(ENSEMBLE_SCALERS_FILE, 'rb') as f:
+        scalers = pickle.load(f)
+    
+    with open(ENSEMBLE_FEATURES_FILE, 'rb') as f:
+        feature_cols = pickle.load(f)
+    
+    print(f"✓ Loaded {len(models)} models")
+    print(f"✓ Loaded {len(feature_cols)} features")
+    
+    # Try to load stacking artifacts (optional)
+    meta_clf = None
+    platt = None
+    try:
+        with open(ENSEMBLE_META_LR_FILE, 'rb') as f:
+            meta_clf = pickle.load(f)
+        with open(ENSEMBLE_PLATT_FILE, 'rb') as f:
+            platt = pickle.load(f)
+        print('✓ Loaded stacking meta-model and Platt calibrator')
+    except Exception:
+        pass
+
+    # Try to load ensemble weights/threshold (optional)
+    ensemble_weights = None
+    ensemble_threshold = None
+    try:
+        with open(ENSEMBLE_WEIGHTS_FILE, 'rb') as f:
+            w = pickle.load(f)
+            ensemble_weights = w.get('weights')
+            ensemble_threshold = w.get('threshold')
+        print('✓ Loaded ensemble weights and threshold')
+    except Exception:
+        pass
+
+    return models, scalers, feature_cols, model_types, meta_clf, platt, ensemble_weights, ensemble_threshold
+
+
+def get_todays_games():
+    """Fetch today's NBA games"""
+    try:
+        board = scoreboard.ScoreBoard()
+        games_dict = board.games.get_dict()
+        
+        today_games = []
+        for game in games_dict:
+            today_games.append({
+                'game_id': game['gameId'],
+                'home_team': game['homeTeam']['teamName'],
+                'away_team': game['awayTeam']['teamName'],
+                'home_team_id': game['homeTeam']['teamId'],
+                'away_team_id': game['awayTeam']['teamId'],
+                'game_status': game['gameStatusText']
+            })
+        
+        return today_games
+    except:
+        return []
+
+
+def get_recent_team_stats(team_id, games_df, window_size=20):
+    """Get recent statistics for a team including fatigue features"""
+    team_games = games_df[games_df['TEAM_ID'] == team_id].sort_values('GAME_DATE')
+    
+    if len(team_games) == 0:
+        return None
+    
+    fe = FeatureEngineering(window_size=window_size)
+    
+    # CRITICAL: Calculate four factors on the FULL games_df before creating rolling features
+    games_df_with_factors = fe.calculate_four_factors(games_df.copy())
+    
+    recent_with_features = fe.create_rolling_features(games_df_with_factors, team_id)
+    
+    if len(recent_with_features) == 0:
+        return None
+    
+    latest = recent_with_features.iloc[-1]
+    # Include new fatigue features
+    roll_cols = [col for col in recent_with_features.columns 
+                 if 'ROLL' in col or col in ['WIN_STREAK', 'RECENT_FORM', 'WIN_PATTERN_3GAME', 
+                                              'MOMENTUM_TREND', 'WIN_CONSISTENCY', 'IS_HOME',
+                                              'DAYS_REST', 'IS_BACK_TO_BACK', 'IS_3_IN_4']]
+    features = {col: latest[col] for col in roll_cols if col in latest.index}
+    
+    return features
+
+
+def compute_head_to_head(games_df, team_id, opponent_id, window=10):
+    """Compute head-to-head record against specific opponent (last N meetings)"""
+    # Get all completed games for this team
+    team_games = games_df[games_df['TEAM_ID'] == team_id].copy()
+    
+    # Get opponent abbreviation
+    opp_games = games_df[games_df['TEAM_ID'] == opponent_id]
+    if len(opp_games) == 0:
+        return {'H2H_WIN_RATE': 0.5, 'H2H_GAMES': 0, 'H2H_PTS_DIFF': 0}
+    
+    opp_abbrev = opp_games.iloc[0].get('TEAM_ABBREVIATION', '')
+    
+    # Find games against this opponent
+    h2h_games = team_games[team_games['MATCHUP'].str.contains(opp_abbrev, na=False)].tail(window)
+    
+    if len(h2h_games) == 0:
+        return {'H2H_WIN_RATE': 0.5, 'H2H_GAMES': 0, 'H2H_PTS_DIFF': 0}
+    
+    wins = (h2h_games['WL'] == 'W').sum()
+    games_played = len(h2h_games)
+    pts_diff = h2h_games['PLUS_MINUS'].mean() if 'PLUS_MINUS' in h2h_games.columns else 0
+    
+    return {
+        'H2H_WIN_RATE': wins / games_played,
+        'H2H_GAMES': min(games_played, window),
+        'H2H_PTS_DIFF': pts_diff if not pd.isna(pts_diff) else 0
+    }
+
+
+def predict_game_ensemble(models, scalers, feature_cols, model_types, home_features, away_features, meta_clf=None, platt=None, ensemble_weights=None, ensemble_threshold=None, h2h_home=None, h2h_away=None):
+    """Predict game using ensemble"""
+    
+    # Combine features in correct order
+    feature_dict = {}
+    for col in feature_cols:
+        if col.startswith('HOME_'):
+            base_col = col.replace('HOME_', '')
+            # Check for H2H features
+            if base_col.startswith('H2H_') and h2h_home:
+                feature_dict[col] = h2h_home.get(base_col, 0)
+            else:
+                feature_dict[col] = home_features.get(base_col, 0)
+        elif col.startswith('AWAY_'):
+            base_col = col.replace('AWAY_', '')
+            # Check for H2H features
+            if base_col.startswith('H2H_') and h2h_away:
+                feature_dict[col] = h2h_away.get(base_col, 0)
+            else:
+                feature_dict[col] = away_features.get(base_col, 0)
+    
+    # Convert to array
+    features = np.array([feature_dict[col] for col in feature_cols]).reshape(1, -1)
+    
+    # Get predictions from each model
+    predictions = []
+    for model, scaler, model_type in zip(models, scalers, model_types):
+        features_scaled = scaler.transform(features)
+        
+        if model_type in ('xgboost', 'logistic'):
+            pred = model.predict_proba(features_scaled)[0][1]
+        elif model_type == 'lightgbm':
+            # LightGBM Booster returns raw scores, need to convert to probability
+            pred = model.predict(features_scaled)[0]
+        else:  # keras
+            pred = model.predict(features_scaled, verbose=0)[0][0]
+        
+        predictions.append(float(pred))
+    
+    # If stacking meta-model is available, build meta feature vector and use it
+    if meta_clf is not None and platt is not None:
+        raw = np.array(predictions).reshape(1, -1)
+        conf = np.abs(raw - 0.5)
+        meta_feats = [raw, conf]
+        if 'ELO_DIFF' in feature_cols:
+            elo_diff = home_features.get('ELO_DIFF', 0) if isinstance(home_features, dict) else 0
+            meta_feats.append(np.array([[elo_diff]]))
+        meta_input = np.hstack(meta_feats)
+
+        # Try to predict with the saved meta_clf; if feature mismatch, fall back to raw-only
+        try:
+            meta_prob = meta_clf.predict_proba(meta_input)[:, 1][0]
+        except Exception:
+            try:
+                meta_prob = meta_clf.predict_proba(raw)[:, 1][0]
+            except Exception:
+                # give up on stacking, fallback to averaged predictions
+                meta_prob = None
+
+        if meta_prob is not None:
+            try:
+                ensemble_pred = float(platt.predict_proba(np.array([[meta_prob]]))[:, 1][0])
+            except Exception:
+                ensemble_pred = float(meta_prob)
+        else:
+            # fallback to simple average
+            ensemble_pred = np.mean(predictions)
+    else:
+        # If ensemble weights are provided, use weighted average with threshold if available
+        if ensemble_weights is not None:
+            w = np.array(ensemble_weights)
+            # normalize weights if not normalized
+            if not np.isclose(w.sum(), 1.0):
+                w = w / w.sum()
+            ensemble_prob = float(np.dot(w, np.array(predictions)))
+            if ensemble_threshold is not None:
+                ensemble_pred = float(1.0 if ensemble_prob >= ensemble_threshold else 0.0)
+            else:
+                ensemble_pred = ensemble_prob
+        else:
+            # Average predictions
+            ensemble_pred = np.mean(predictions)
+    
+    return {
+        'home_win_probability': float(ensemble_pred),
+        'away_win_probability': float(1 - ensemble_pred),
+        'predicted_winner': 'HOME' if ensemble_pred > 0.5 else 'AWAY',
+        'confidence': abs(ensemble_pred - 0.5) * 2,
+        'individual_predictions': predictions,
+        'model_agreement': 1 - np.std(predictions)  # High = models agree
+    }
+
+
+def main(single_model=None):
+    """Main prediction function
+    
+    Args:
+        single_model: If specified, use only this model ('lstm', 'xgboost', 'lightgbm', 'logistic')
+                      If None, use full ensemble
+    """
+    print("="*70)
+    if single_model:
+        print(f"NBA GAME PREDICTIONS - {single_model.upper()} ONLY")
+    else:
+        print("NBA GAME PREDICTIONS - ENSEMBLE MODE")
+        print("XGBoost + LightGBM + Logistic + LSTM")
+    print("="*70)
+    
+    # Load ensemble
+    models, scalers, feature_cols, model_types, meta_clf, platt, ensemble_weights, ensemble_threshold = load_ensemble()
+    
+    # Filter to single model if specified
+    if single_model:
+        # Find the model matching the requested type
+        indices = [i for i, mt in enumerate(model_types) if mt == single_model]
+        if not indices:
+            print(f"❌ Model type '{single_model}' not found in ensemble!")
+            print(f"   Available: {model_types}")
+            return
+        idx = indices[0]
+        models = [models[idx]]
+        scalers = [scalers[idx]]
+        model_types = [model_types[idx]]
+        # Disable stacking for single model
+        meta_clf = None
+        platt = None
+        ensemble_weights = None
+        print(f"✓ Using {single_model.upper()} model only")
+    
+    # Fetch recent data
+    print("\n📊 Fetching recent team statistics...")
+    gamefinder = leaguegamefinder.LeagueGameFinder(
+        season_nullable='2025-26',
+        league_id_nullable='00'
+    )
+    games_df = gamefinder.get_data_frames()[0]
+    games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+    games_df = games_df.sort_values('GAME_DATE')
+    print(f"✓ Loaded {len(games_df)} games from 2025-26 season")
+    
+    # Get today's games
+    print("\n🏀 Fetching today's games...")
+    todays_games = get_todays_games()
+    
+    if len(todays_games) == 0:
+        print("\n❌ No games found for today.")
+        print("   The NBA schedule might be empty, or it's the off-season.")
+        return
+    
+    print(f"✓ Found {len(todays_games)} games today")
+    
+    # Predict each game
+    print("\n" + "="*70)
+    print("ENSEMBLE PREDICTIONS")
+    print("="*70)
+    
+    all_teams = teams.get_teams()
+    predictions = []
+    
+    for i, game in enumerate(todays_games):
+        print(f"\n🏀 Game {i+1}/{len(todays_games)}")
+        print("-"*70)
+        
+        # Get team names
+        home_team = [t for t in all_teams if t['id'] == game['home_team_id']][0]
+        away_team = [t for t in all_teams if t['id'] == game['away_team_id']][0]
+        
+        print(f"   {away_team['full_name']} @ {home_team['full_name']}")
+        print(f"   Status: {game['game_status']}")
+        
+        # Get recent stats
+        home_features = get_recent_team_stats(game['home_team_id'], games_df)
+        away_features = get_recent_team_stats(game['away_team_id'], games_df)
+        
+        if home_features is None or away_features is None:
+            print("   ⚠️  Not enough data for prediction")
+            continue
+        
+        # Compute head-to-head
+        h2h_home = compute_head_to_head(games_df, game['home_team_id'], game['away_team_id'])
+        h2h_away = compute_head_to_head(games_df, game['away_team_id'], game['home_team_id'])
+        
+        # Predict with ensemble
+        try:
+            prediction = predict_game_ensemble(
+                models, scalers, feature_cols, model_types,
+                home_features, away_features,
+                meta_clf=meta_clf, platt=platt,
+                ensemble_weights=ensemble_weights, ensemble_threshold=ensemble_threshold,
+                h2h_home=h2h_home, h2h_away=h2h_away
+            )
+            
+            winner = home_team['full_name'] if prediction['predicted_winner'] == 'HOME' else away_team['full_name']
+            
+            print(f"\n   🏆 Predicted Winner: {winner}")
+            print(f"   📊 Confidence: {prediction['confidence']*100:.1f}%")
+            print(f"   🏠 Home Win Prob: {prediction['home_win_probability']*100:.1f}%")
+            print(f"   ✈️  Away Win Prob: {prediction['away_win_probability']*100:.1f}%")
+            
+            # Show fatigue info if available
+            home_rest = home_features.get('DAYS_REST', 'N/A')
+            away_rest = away_features.get('DAYS_REST', 'N/A')
+            home_b2b = "⚠️ B2B" if home_features.get('IS_BACK_TO_BACK', 0) == 1 else ""
+            away_b2b = "⚠️ B2B" if away_features.get('IS_BACK_TO_BACK', 0) == 1 else ""
+            print(f"\n   😴 Rest: Home {home_rest}d {home_b2b} | Away {away_rest}d {away_b2b}")
+            print(f"   🆚 H2H: Home {h2h_home['H2H_WIN_RATE']*100:.0f}% ({h2h_home['H2H_GAMES']} games)")
+            
+            # Show individual model predictions
+            print(f"\n   🤖 Model Agreement: {prediction['model_agreement']*100:.1f}%")
+            indiv = prediction['individual_predictions']
+            # Map model types to display names
+            model_type_labels = {
+                'xgboost': 'XGBoost',
+                'lightgbm': 'LightGBM', 
+                'logistic': 'Logistic',
+                'keras': 'LSTM'
+            }
+            for j, mtype in enumerate(model_types[:len(indiv)]):
+                label = model_type_labels.get(mtype, mtype)
+                print(f"      {label}:".ljust(16) + f"{indiv[j]*100:.1f}%")
+            
+            predictions.append({
+                'away_team': away_team['full_name'],
+                'home_team': home_team['full_name'],
+                'predicted_winner': winner,
+                'confidence': prediction['confidence'],
+                'home_win_prob': prediction['home_win_probability'],
+                'model_agreement': prediction['model_agreement']
+            })
+            
+        except Exception as e:
+            print(f"   ❌ Error predicting: {e}")
+    
+    # Summary
+    if predictions:
+        print("\n" + "="*70)
+        print("SUMMARY - ENSEMBLE PREDICTIONS")
+        print("="*70)
+        
+        # Bet quality tiers based on confidence (probability distance from 50%)
+        # 50% confidence = 75% probability, 40% = 70%, 30% = 65%, 20% = 60%
+        for pred in predictions:
+            conf = pred['confidence']
+            
+            # Bet quality tier
+            if conf >= 0.50:  # 75%+ probability
+                bet_tier = "🔥 EXCELLENT BET"
+                tier_color = "🔥"
+            elif conf >= 0.40:  # 70%+ probability
+                bet_tier = "💰 STRONG BET"
+                tier_color = "💰"
+            elif conf >= 0.30:  # 65%+ probability
+                bet_tier = "⚡ GOOD BET"
+                tier_color = "⚡"
+            elif conf >= 0.20:  # 60%+ probability
+                bet_tier = "📊 MODERATE BET"
+                tier_color = "📊"
+            elif conf >= 0.10:  # 55%+ probability
+                bet_tier = "❓ RISKY - LOW EDGE"
+                tier_color = "❓"
+            else:  # <55% probability
+                bet_tier = "⛔ SKIP - COIN FLIP"
+                tier_color = "⛔"
+            
+            # Agreement icon
+            agree_icon = "✅" if pred['model_agreement'] > 0.90 else "⚠️" if pred['model_agreement'] > 0.80 else "❗"
+            
+            print(f"\n{tier_color} {pred['away_team']} @ {pred['home_team']}")
+            print(f"   → {pred['predicted_winner']} ({pred['home_win_prob']*100:.1f}% prob, {conf*100:.0f}% confidence)")
+            print(f"   {agree_icon} Model agreement: {pred['model_agreement']*100:.0f}%")
+            print(f"   📋 {bet_tier}")
+        
+        # Legend
+        print("\n" + "-"*70)
+        print("BET QUALITY LEGEND:")
+        print("   🔥 EXCELLENT (75%+) | 💰 STRONG (70-75%) | ⚡ GOOD (65-70%)")
+        print("   📊 MODERATE (60-65%) | ❓ RISKY (55-60%) | ⛔ SKIP (<55%)")
+        print("-"*70)
+    
+    print("\n" + "="*70)
+    print("Predictions complete! Good luck! 🍀")
+    print("="*70)
+
+
+if __name__ == "__main__":
+    import sys
+    
+    # Parse command line arguments
+    single_model = None
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        # Map aliases
+        if arg == 'lstm':
+            arg = 'keras'  # LSTM is stored as 'keras' type
+        if arg in ['keras', 'xgboost', 'lightgbm', 'logistic']:
+            single_model = arg
+            display_names = {'keras': 'LSTM', 'xgboost': 'XGBoost', 
+                           'lightgbm': 'LightGBM', 'logistic': 'Logistic'}
+            print(f"🎯 Using SINGLE MODEL: {display_names.get(arg, arg.upper())}")
+        elif arg == '--help' or arg == '-h':
+            print("Usage: python predict_with_ensemble.py [model]")
+            print("\nOptions:")
+            print("  (no args)  - Use full ensemble (XGBoost + LightGBM + Logistic + LSTM)")
+            print("  lstm       - Use only LSTM model")
+            print("  xgboost    - Use only XGBoost model")
+            print("  lightgbm   - Use only LightGBM model")
+            print("  logistic   - Use only Logistic Regression model")
+            sys.exit(0)
+    
+    main(single_model=single_model)
