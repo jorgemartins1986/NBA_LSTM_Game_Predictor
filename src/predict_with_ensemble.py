@@ -10,6 +10,7 @@ Usage:
 import pandas as pd
 import numpy as np
 import pickle
+import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
 import lightgbm as lgb
@@ -23,6 +24,9 @@ from .paths import (
     ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE, ENSEMBLE_WEIGHTS_FILE
 )
 
+# Enable unsafe deserialization for Lambda layers with Python lambdas
+keras.config.enable_unsafe_deserialization()
+
 
 def load_ensemble():
     """Load all ensemble models and artifacts"""
@@ -32,28 +36,61 @@ def load_ensemble():
     with open(ENSEMBLE_TYPES_FILE, 'rb') as f:
         model_types = pickle.load(f)
     
+    # Custom objects for Lambda layer deserialization
+    custom_objects = {
+        'reduce_sum_axis1': lambda x: tf.reduce_sum(x, axis=1)
+    }
+    
     # Load models based on type
     models = []
+    loaded_types = []  # Track which models actually loaded
+    loaded_indices = []  # Track indices for scaler matching
     for i, model_type in enumerate(model_types):
         if model_type == 'xgboost':
             model = xgb.XGBClassifier()
             model.load_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
             print(f"✓ Loaded XGBoost model {i+1}")
+            models.append(model)
+            loaded_types.append(model_type)
+            loaded_indices.append(i)
         elif model_type == 'lightgbm':
             model = lgb.Booster(model_file=get_model_path(f'nba_ensemble_lightgbm_{i+1}.txt'))
             print(f"✓ Loaded LightGBM model {i+1}")
+            models.append(model)
+            loaded_types.append(model_type)
+            loaded_indices.append(i)
         elif model_type == 'logistic':
             with open(get_model_path(f'nba_ensemble_logistic_{i+1}.pkl'), 'rb') as f:
                 model = pickle.load(f)
             print(f"✓ Loaded Logistic Regression model {i+1}")
+            models.append(model)
+            loaded_types.append(model_type)
+            loaded_indices.append(i)
         else:  # keras
-            model = keras.models.load_model(get_model_path(f'nba_ensemble_model_{i+1}.keras'))
-            print(f"✓ Loaded Keras model {i+1}")
-        models.append(model)
+            try:
+                model = keras.models.load_model(
+                    get_model_path(f'nba_ensemble_model_{i+1}.keras'), 
+                    safe_mode=False,
+                    custom_objects=custom_objects
+                )
+                print(f"✓ Loaded Keras model {i+1}")
+                models.append(model)
+                loaded_types.append(model_type)
+                loaded_indices.append(i)
+            except Exception as e:
+                print(f"⚠ Skipping Keras model {i+1} (needs retraining): {type(e).__name__}")
+                print(f"  Run 'python train.py' to retrain with fixed LSTM architecture")
+                continue  # Skip this model
+    
+    # Update model_types to only include loaded models
+    model_types = loaded_types
     
     # Load scalers and features
     with open(ENSEMBLE_SCALERS_FILE, 'rb') as f:
-        scalers = pickle.load(f)
+        all_scalers = pickle.load(f)
+    
+    # Filter scalers to only loaded models
+    scalers = [all_scalers[i] for i in loaded_indices]
     
     with open(ENSEMBLE_FEATURES_FILE, 'rb') as f:
         feature_cols = pickle.load(f)
@@ -449,6 +486,24 @@ def main(single_model=None):
     print("\n" + "="*70)
     print("Predictions complete! Good luck! 🍀")
     print("="*70)
+
+
+def predict_with_single_model(model_name, matchup=None):
+    """Wrapper function for single model predictions from CLI
+    
+    Args:
+        model_name: Model to use ('xgboost', 'lightgbm', 'logistic', 'lstm')
+        matchup: Optional tuple of (away_team, home_team) abbreviations
+    """
+    # Map lstm to keras (internal name)
+    if model_name == 'lstm':
+        model_name = 'keras'
+    
+    display_names = {'keras': 'LSTM', 'xgboost': 'XGBoost', 
+                     'lightgbm': 'LightGBM', 'logistic': 'Logistic'}
+    print(f"🎯 Using SINGLE MODEL: {display_names.get(model_name, model_name.upper())}")
+    
+    main(single_model=model_name)
 
 
 if __name__ == "__main__":

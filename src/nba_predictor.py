@@ -640,7 +640,11 @@ class NBAPredictor:
             
             # Apply attention
             context = layers.Multiply()([lstm2, attention])
-            context = layers.Lambda(lambda x: tf.reduce_sum(x, axis=1))(context)
+            # Sum over timesteps with explicit output_shape for serialization
+            context = layers.Lambda(
+                lambda x: tf.reduce_sum(x, axis=1),
+                output_shape=lambda s: (s[0], s[2])
+            )(context)
             
             # Also add global pooling paths
             avg_pool = layers.GlobalAveragePooling1D()(lstm2)
