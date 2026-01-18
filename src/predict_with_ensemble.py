@@ -20,8 +20,10 @@ from .nba_predictor import FeatureEngineering, SumPooling1D
 from .paths import (
     get_model_path,
     ENSEMBLE_TYPES_FILE, ENSEMBLE_SCALERS_FILE, ENSEMBLE_FEATURES_FILE,
-    ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE, ENSEMBLE_WEIGHTS_FILE
+    ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE, ENSEMBLE_WEIGHTS_FILE,
+    PREDICTION_HISTORY_FILE
 )
+from datetime import datetime
 
 # Enable unsafe deserialization for Lambda layers with Python lambdas
 keras.config.enable_unsafe_deserialization()
@@ -124,6 +126,76 @@ def load_ensemble():
         pass
 
     return models, scalers, feature_cols, model_types, meta_clf, platt, ensemble_weights, ensemble_threshold
+
+
+def save_predictions_to_history(predictions, date_str=None):
+    """Save predictions to history CSV file (creates or appends)
+    
+    Args:
+        predictions: List of prediction dicts with keys:
+            - away_team, home_team, predicted_winner, confidence
+        date_str: Optional date string (YYYY-MM-DD), defaults to today
+    """
+    import os
+    
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+    
+    # Prepare rows
+    rows = []
+    for pred in predictions:
+        # Map confidence to bet tier level
+        conf = pred['confidence']
+        if conf >= 0.50:
+            level = "EXCELLENT"
+        elif conf >= 0.40:
+            level = "STRONG"
+        elif conf >= 0.30:
+            level = "GOOD"
+        elif conf >= 0.20:
+            level = "MODERATE"
+        elif conf >= 0.10:
+            level = "RISKY"
+        else:
+            level = "SKIP"
+        
+        rows.append({
+            'date': date_str,
+            'match': f"{pred['away_team']} vs {pred['home_team']}",
+            'prediction': pred['predicted_winner'],
+            'winner': '',  # To be filled later
+            'level': level,
+            'right_wrong': ''  # To be filled later
+        })
+    
+    # Check if file exists
+    file_exists = os.path.exists(PREDICTION_HISTORY_FILE)
+    
+    # Create DataFrame
+    new_df = pd.DataFrame(rows)
+    
+    if file_exists:
+        # Read existing and check for duplicates
+        existing_df = pd.read_csv(PREDICTION_HISTORY_FILE)
+        
+        # Check if predictions for this date already exist
+        existing_matches_today = existing_df[existing_df['date'] == date_str]['match'].tolist()
+        
+        # Filter out duplicates
+        new_df = new_df[~new_df['match'].isin(existing_matches_today)]
+        
+        if len(new_df) == 0:
+            print(f"\n📋 All predictions for {date_str} already in history. Skipping save.")
+            return
+        
+        # Append new predictions
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        combined_df.to_csv(PREDICTION_HISTORY_FILE, index=False)
+        print(f"\n📋 Appended {len(new_df)} new predictions to history ({PREDICTION_HISTORY_FILE})")
+    else:
+        # Create new file
+        new_df.to_csv(PREDICTION_HISTORY_FILE, index=False)
+        print(f"\n📋 Created prediction history with {len(new_df)} predictions ({PREDICTION_HISTORY_FILE})")
 
 
 def get_todays_games():
@@ -489,6 +561,9 @@ def main(single_model=None):
         print("   🔥 EXCELLENT (75%+) | 💰 STRONG (70-75%) | ⚡ GOOD (65-70%)")
         print("   📊 MODERATE (60-65%) | ❓ RISKY (55-60%) | ⛔ SKIP (<55%)")
         print("-"*70)
+        
+        # Save predictions to history
+        save_predictions_to_history(predictions)
     
     print("\n" + "="*70)
     print("Predictions complete! Good luck! 🍀")

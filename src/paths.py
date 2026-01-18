@@ -41,6 +41,7 @@ GAMES_CACHE_FILE = get_cache_path('nba_games_cache.csv')
 ELO_CACHE_FILE = get_cache_path('nba_elo_cache.pkl')
 FEATURE_CACHE_FILE = get_cache_path('feature_cache.pkl')
 MATCHUP_CACHE_FILE = get_cache_path('matchup_cache.pkl')
+PREDICTION_HISTORY_FILE = get_report_path('prediction_history.csv')
 
 XGB_PARAMS_FILE = get_config_path('best_xgb_params.json')
 
