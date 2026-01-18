@@ -133,18 +133,19 @@ def update_results(date_str=None, update_all=False):
         updated_count = 0
         
         for idx, row in df[date_mask].iterrows():
-            match = row['match']
-            if match in results:
-                winner = results[match]
+            # Build match key from separate columns
+            match_key = f"{row['away_team']} vs {row['home_team']}"
+            if match_key in results:
+                winner = results[match_key]
                 prediction = row['prediction']
-                right_wrong = 1 if prediction == winner else 0
+                correct = 1 if prediction == winner else 0
                 
                 df.at[idx, 'winner'] = winner
-                df.at[idx, 'right_wrong'] = right_wrong
+                df.at[idx, 'correct'] = correct
                 updated_count += 1
                 
-                status = "✅" if right_wrong == 1 else "❌"
-                print(f"   {status} {match}: predicted {prediction}, winner {winner}")
+                status = "✅" if correct == 1 else "❌"
+                print(f"   {status} {row['away_team']} @ {row['home_team']}: predicted {prediction}, winner {winner}")
         
         print(f"   Updated {updated_count} games for {date}")
         total_updated += updated_count
@@ -169,14 +170,14 @@ def show_stats(df=None):
             return
         df = pd.read_csv(PREDICTION_HISTORY_FILE)
     
-    # Filter to completed predictions
-    completed = df[df['right_wrong'].notna() & (df['right_wrong'] != '')]
+    # Filter to completed predictions (correct column is filled)
+    completed = df[df['correct'].notna() & (df['correct'] != '')].copy()
     
     if len(completed) == 0:
         print("\n📊 No completed predictions yet.")
         return
     
-    completed['right_wrong'] = completed['right_wrong'].astype(int)
+    completed['correct'] = completed['correct'].astype(int)
     
     print("\n" + "="*60)
     print("PREDICTION HISTORY STATISTICS")
@@ -184,20 +185,47 @@ def show_stats(df=None):
     
     # Overall accuracy
     total = len(completed)
-    correct = completed['right_wrong'].sum()
-    accuracy = correct / total * 100
-    print(f"\n📊 Overall: {correct}/{total} correct ({accuracy:.1f}%)")
+    correct_count = completed['correct'].sum()
+    accuracy = correct_count / total * 100
+    print(f"\n📊 Overall: {correct_count}/{total} correct ({accuracy:.1f}%)")
     
-    # By confidence level
+    # By confidence tier
     print("\n📈 By Bet Quality Tier:")
     tier_order = ['EXCELLENT', 'STRONG', 'GOOD', 'MODERATE', 'RISKY', 'SKIP']
     for tier in tier_order:
-        tier_games = completed[completed['level'] == tier]
+        tier_games = completed[completed['tier'] == tier]
         if len(tier_games) > 0:
-            tier_correct = tier_games['right_wrong'].sum()
+            tier_correct = tier_games['correct'].sum()
             tier_total = len(tier_games)
             tier_acc = tier_correct / tier_total * 100
             print(f"   {tier:12} {tier_correct:3}/{tier_total:3} ({tier_acc:5.1f}%)")
+    
+    # By confidence ranges (using the actual confidence values)
+    if 'confidence' in completed.columns:
+        print("\n🎯 By Confidence Level:")
+        bins = [(0.4, 1.0, '40%+'), (0.3, 0.4, '30-40%'), (0.2, 0.3, '20-30%'), 
+                (0.1, 0.2, '10-20%'), (0.0, 0.1, '<10%')]
+        for low, high, label in bins:
+            range_games = completed[(completed['confidence'] >= low) & (completed['confidence'] < high)]
+            if len(range_games) > 0:
+                range_correct = range_games['correct'].sum()
+                range_total = len(range_games)
+                range_acc = range_correct / range_total * 100
+                print(f"   {label:12} {range_correct:3}/{range_total:3} ({range_acc:5.1f}%)")
+    
+    # By model agreement (if available)
+    if 'model_agreement' in completed.columns:
+        print("\n🤝 By Model Agreement:")
+        high_agree = completed[completed['model_agreement'] >= 0.95]
+        med_agree = completed[(completed['model_agreement'] >= 0.90) & (completed['model_agreement'] < 0.95)]
+        low_agree = completed[completed['model_agreement'] < 0.90]
+        
+        for label, subset in [('95%+ agree', high_agree), ('90-95% agree', med_agree), ('<90% agree', low_agree)]:
+            if len(subset) > 0:
+                sub_correct = subset['correct'].sum()
+                sub_total = len(subset)
+                sub_acc = sub_correct / sub_total * 100
+                print(f"   {label:12} {sub_correct:3}/{sub_total:3} ({sub_acc:5.1f}%)")
     
     # Recent performance (last 7 days)
     completed['date'] = pd.to_datetime(completed['date'])
@@ -205,7 +233,7 @@ def show_stats(df=None):
     recent = completed[completed['date'] >= week_ago]
     
     if len(recent) > 0:
-        recent_correct = recent['right_wrong'].sum()
+        recent_correct = recent['correct'].sum()
         recent_total = len(recent)
         recent_acc = recent_correct / recent_total * 100
         print(f"\n📅 Last 7 days: {recent_correct}/{recent_total} ({recent_acc:.1f}%)")

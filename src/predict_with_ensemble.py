@@ -133,7 +133,7 @@ def save_predictions_to_history(predictions, date_str=None):
     
     Args:
         predictions: List of prediction dicts with keys:
-            - away_team, home_team, predicted_winner, confidence
+            - away_team, home_team, predicted_winner, confidence, home_win_prob, model_agreement
         date_str: Optional date string (YYYY-MM-DD), defaults to today
     """
     import os
@@ -144,45 +144,55 @@ def save_predictions_to_history(predictions, date_str=None):
     # Prepare rows
     rows = []
     for pred in predictions:
-        # Map confidence to bet tier level
+        # Map confidence to bet tier
         conf = pred['confidence']
         if conf >= 0.50:
-            level = "EXCELLENT"
+            tier = "EXCELLENT"
         elif conf >= 0.40:
-            level = "STRONG"
+            tier = "STRONG"
         elif conf >= 0.30:
-            level = "GOOD"
+            tier = "GOOD"
         elif conf >= 0.20:
-            level = "MODERATE"
+            tier = "MODERATE"
         elif conf >= 0.10:
-            level = "RISKY"
+            tier = "RISKY"
         else:
-            level = "SKIP"
+            tier = "SKIP"
         
         rows.append({
             'date': date_str,
-            'match': f"{pred['away_team']} vs {pred['home_team']}",
+            'away_team': pred['away_team'],
+            'home_team': pred['home_team'],
             'prediction': pred['predicted_winner'],
             'winner': '',  # To be filled later
-            'level': level,
-            'right_wrong': ''  # To be filled later
+            'confidence': round(pred['confidence'], 3),
+            'home_win_prob': round(pred['home_win_prob'], 3),
+            'model_agreement': round(pred.get('model_agreement', 0), 3),
+            'tier': tier,
+            'correct': ''  # To be filled later (1 or 0)
         })
     
     # Check if file exists
     file_exists = os.path.exists(PREDICTION_HISTORY_FILE)
     
-    # Create DataFrame
-    new_df = pd.DataFrame(rows)
+    # Create DataFrame with column order
+    columns = ['date', 'away_team', 'home_team', 'prediction', 'winner', 
+               'confidence', 'home_win_prob', 'model_agreement', 'tier', 'correct']
+    new_df = pd.DataFrame(rows, columns=columns)
     
     if file_exists:
         # Read existing and check for duplicates
         existing_df = pd.read_csv(PREDICTION_HISTORY_FILE)
         
-        # Check if predictions for this date already exist
-        existing_matches_today = existing_df[existing_df['date'] == date_str]['match'].tolist()
+        # Check if predictions for this date already exist (match by away_team + home_team)
+        existing_df['match_key'] = existing_df['away_team'] + ' vs ' + existing_df['home_team']
+        new_df['match_key'] = new_df['away_team'] + ' vs ' + new_df['home_team']
+        existing_matches_today = existing_df[existing_df['date'] == date_str]['match_key'].tolist()
         
         # Filter out duplicates
-        new_df = new_df[~new_df['match'].isin(existing_matches_today)]
+        new_df = new_df[~new_df['match_key'].isin(existing_matches_today)]
+        new_df = new_df.drop(columns=['match_key'])
+        existing_df = existing_df.drop(columns=['match_key'])
         
         if len(new_df) == 0:
             print(f"\n📋 All predictions for {date_str} already in history. Skipping save.")

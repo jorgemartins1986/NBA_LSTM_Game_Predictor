@@ -191,7 +191,90 @@ python scripts/fetch_and_update_games.py --download-seasons 2023-24 2024-25 --ca
 
 ---
 
-## 🛠️ Troubleshooting
+## � Prediction History & Tracking
+
+The system automatically tracks all predictions and results for performance analysis.
+
+### Daily Workflow
+
+```bash
+# 1. Run predictions (auto-saves to history)
+python predict.py
+
+# 2. Next day: update with actual results
+python -m src.update_prediction_results
+
+# 3. View accuracy statistics anytime
+python -m src.update_prediction_results --stats
+```
+
+### History File Format
+
+Predictions are saved to `reports/prediction_history.csv`:
+
+| Column | Description |
+|--------|-------------|
+| `date` | Prediction date (YYYY-MM-DD) |
+| `away_team` | Away team full name |
+| `home_team` | Home team full name |
+| `prediction` | Predicted winner |
+| `winner` | Actual winner (filled after game) |
+| `confidence` | Model confidence (0-1, distance from 50%) |
+| `home_win_prob` | Home win probability (0-1) |
+| `model_agreement` | How much models agreed (0-1) |
+| `tier` | Bet quality tier (EXCELLENT/STRONG/GOOD/MODERATE/RISKY/SKIP) |
+| `correct` | 1 if correct, 0 if wrong |
+
+### Update Results Commands
+
+```bash
+# Update yesterday's results (default)
+python -m src.update_prediction_results
+
+# Update specific date
+python -m src.update_prediction_results 2026-01-17
+
+# Update all pending results
+python -m src.update_prediction_results --all
+
+# View statistics only
+python -m src.update_prediction_results --stats
+```
+
+### Statistics Output
+
+```
+============================================================
+PREDICTION HISTORY STATISTICS
+============================================================
+
+📊 Overall: 6/9 correct (66.7%)
+
+📈 By Bet Quality Tier:
+   EXCELLENT      1/  1 (100.0%)
+   GOOD           1/  2 ( 50.0%)
+   MODERATE       1/  2 ( 50.0%)
+   RISKY          2/  2 (100.0%)
+   SKIP           1/  2 ( 50.0%)
+
+🎯 By Confidence Level:
+   40%+           1/  1 (100.0%)
+   30-40%         1/  2 ( 50.0%)
+   ...
+
+📅 Last 7 days: 6/9 (66.7%)
+============================================================
+```
+
+### Recommended Retraining Schedule
+
+- **Daily**: Run predictions (data is fresh via API)
+- **Every 2 weeks**: Full retrain with `python train.py`
+- **When accuracy drops**: Check stats and retrain if needed
+
+---
+
+## �🛠️ Troubleshooting
 
 ### "No games found for today"
 - Check if it's the off-season or no games scheduled
