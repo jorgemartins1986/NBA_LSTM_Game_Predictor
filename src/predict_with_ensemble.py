@@ -14,7 +14,7 @@ import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
 from nba_api.live.nba.endpoints import scoreboard
-from nba_api.stats.endpoints import leaguegamefinder
+from nba_api.stats.endpoints import leaguegamefinder, scoreboardv2
 from nba_api.stats.static import teams
 from .nba_predictor import FeatureEngineering, SumPooling1D
 from .paths import (
@@ -223,45 +223,67 @@ def get_todays_games():
     Returns:
         tuple: (list of games, game_date string in YYYY-MM-DD format, all_finished bool)
         
-    Note: The NBA API scoreboard shows the most recent games. If all games are
-    finished (Final), this likely means we're looking at yesterday's games and
-    today's games haven't started yet.
+    Uses ScoreboardV2 (stats API) which shows scheduled games for today,
+    with live scoreboard as fallback for game status.
     """
+    game_date_str = get_eastern_date()
+    all_teams_list = teams.get_teams()
+    team_id_to_info = {t['id']: t for t in all_teams_list}
+    
     try:
-        board = scoreboard.ScoreBoard()
+        # Use ScoreboardV2 which has scheduled games (not just live/recent)
+        sb = scoreboardv2.ScoreboardV2(game_date=game_date_str)
+        games_df = sb.get_data_frames()[0]  # GameHeader dataframe
         
-        # Get the game date from the API response (this is the NBA's official date)
-        score_data = board.get_dict()
-        game_date_str = score_data.get('scoreboard', {}).get('gameDate', None)
+        if len(games_df) == 0:
+            print(f"   No games scheduled for {game_date_str}")
+            return [], game_date_str, False
         
-        # If not available, fall back to Eastern time
-        if not game_date_str:
-            game_date_str = get_eastern_date()
-        
-        games_dict = board.games.get_dict()
+        # Try to get live status from live scoreboard
+        live_status = {}
+        try:
+            board = scoreboard.ScoreBoard()
+            live_data = board.get_dict()
+            live_date = live_data.get('scoreboard', {}).get('gameDate', '')
+            # Only use live status if it matches today's date
+            if live_date == game_date_str:
+                for game in board.games.get_dict():
+                    live_status[game['gameId']] = game['gameStatusText']
+        except:
+            pass
         
         today_games = []
         finished_count = 0
-        for game in games_dict:
-            status = game['gameStatusText']
+        
+        for _, row in games_df.iterrows():
+            game_id = row['GAME_ID']
+            home_team_id = row['HOME_TEAM_ID']
+            visitor_team_id = row['VISITOR_TEAM_ID']
+            
+            home_info = team_id_to_info.get(home_team_id, {})
+            visitor_info = team_id_to_info.get(visitor_team_id, {})
+            
+            # Get status from live board if available, else from schedule
+            status = live_status.get(game_id, row.get('GAME_STATUS_TEXT', 'Scheduled'))
+            
             today_games.append({
-                'game_id': game['gameId'],
-                'home_team': game['homeTeam']['teamName'],
-                'away_team': game['awayTeam']['teamName'],
-                'home_team_id': game['homeTeam']['teamId'],
-                'away_team_id': game['awayTeam']['teamId'],
+                'game_id': game_id,
+                'home_team': home_info.get('nickname', row.get('HOME_TEAM_ID', 'Unknown')),
+                'away_team': visitor_info.get('nickname', row.get('VISITOR_TEAM_ID', 'Unknown')),
+                'home_team_id': home_team_id,
+                'away_team_id': visitor_team_id,
                 'game_status': status
             })
+            
             if status == 'Final':
                 finished_count += 1
         
-        # Check if all games are finished (likely showing yesterday's results)
         all_finished = len(today_games) > 0 and finished_count == len(today_games)
-        
         return today_games, game_date_str, all_finished
+        
     except Exception as e:
         print(f"   Error fetching games: {e}")
-        return [], get_eastern_date(), False
+        return [], game_date_str, False
 
 
 def get_recent_team_stats(team_id, games_df, window_size=20):
