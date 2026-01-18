@@ -24,6 +24,15 @@ from .paths import (
     PREDICTION_HISTORY_FILE
 )
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+def get_eastern_date():
+    """Get current date in Eastern Time (NBA's timezone)"""
+    eastern = ZoneInfo('America/New_York')
+    return datetime.now(eastern).strftime('%Y-%m-%d')
 
 # Enable unsafe deserialization for Lambda layers with Python lambdas
 keras.config.enable_unsafe_deserialization()
@@ -134,12 +143,12 @@ def save_predictions_to_history(predictions, date_str=None):
     Args:
         predictions: List of prediction dicts with keys:
             - away_team, home_team, predicted_winner, confidence, home_win_prob, model_agreement
-        date_str: Optional date string (YYYY-MM-DD), defaults to today
+        date_str: Optional date string (YYYY-MM-DD), defaults to Eastern time today
     """
     import os
     
     if date_str is None:
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        date_str = get_eastern_date()
     
     # Prepare rows
     rows = []
@@ -209,25 +218,50 @@ def save_predictions_to_history(predictions, date_str=None):
 
 
 def get_todays_games():
-    """Fetch today's NBA games"""
+    """Fetch today's NBA games
+    
+    Returns:
+        tuple: (list of games, game_date string in YYYY-MM-DD format, all_finished bool)
+        
+    Note: The NBA API scoreboard shows the most recent games. If all games are
+    finished (Final), this likely means we're looking at yesterday's games and
+    today's games haven't started yet.
+    """
     try:
         board = scoreboard.ScoreBoard()
+        
+        # Get the game date from the API response (this is the NBA's official date)
+        score_data = board.get_dict()
+        game_date_str = score_data.get('scoreboard', {}).get('gameDate', None)
+        
+        # If not available, fall back to Eastern time
+        if not game_date_str:
+            game_date_str = get_eastern_date()
+        
         games_dict = board.games.get_dict()
         
         today_games = []
+        finished_count = 0
         for game in games_dict:
+            status = game['gameStatusText']
             today_games.append({
                 'game_id': game['gameId'],
                 'home_team': game['homeTeam']['teamName'],
                 'away_team': game['awayTeam']['teamName'],
                 'home_team_id': game['homeTeam']['teamId'],
                 'away_team_id': game['awayTeam']['teamId'],
-                'game_status': game['gameStatusText']
+                'game_status': status
             })
+            if status == 'Final':
+                finished_count += 1
         
-        return today_games
-    except:
-        return []
+        # Check if all games are finished (likely showing yesterday's results)
+        all_finished = len(today_games) > 0 and finished_count == len(today_games)
+        
+        return today_games, game_date_str, all_finished
+    except Exception as e:
+        print(f"   Error fetching games: {e}")
+        return [], get_eastern_date(), False
 
 
 def get_recent_team_stats(team_id, games_df, window_size=20):
@@ -435,14 +469,23 @@ def main(single_model=None):
     
     # Get today's games
     print("\n🏀 Fetching today's games...")
-    todays_games = get_todays_games()
+    todays_games, game_date, all_finished = get_todays_games()
+    eastern_today = get_eastern_date()
+    print(f"   Game date from API: {game_date}")
+    print(f"   Current date (Eastern): {eastern_today}")
     
     if len(todays_games) == 0:
         print("\n❌ No games found for today.")
         print("   The NBA schedule might be empty, or it's the off-season.")
         return
     
-    print(f"✓ Found {len(todays_games)} games today")
+    # Warn if showing old games
+    if all_finished and game_date != eastern_today:
+        print(f"\n⚠️  WARNING: All games shown are FINAL (from {game_date})")
+        print(f"   Today is {eastern_today} - today's games may not have started yet.")
+        print("   Predictions will still run but won't be saved to history (already recorded).")
+    
+    print(f"✓ Found {len(todays_games)} games for {game_date}")
     
     # Predict each game
     print("\n" + "="*70)
@@ -572,8 +615,11 @@ def main(single_model=None):
         print("   📊 MODERATE (60-65%) | ❓ RISKY (55-60%) | ⛔ SKIP (<55%)")
         print("-"*70)
         
-        # Save predictions to history
-        save_predictions_to_history(predictions)
+        # Save predictions to history (skip if showing old finished games)
+        if all_finished and game_date != eastern_today:
+            print(f"\n📋 Skipping history save (showing old games from {game_date})")
+        else:
+            save_predictions_to_history(predictions, date_str=game_date)
     
     print("\n" + "="*70)
     print("Predictions complete! Good luck! 🍀")
