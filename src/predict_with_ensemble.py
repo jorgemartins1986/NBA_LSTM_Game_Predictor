@@ -239,6 +239,9 @@ def get_todays_games():
             print(f"   No games scheduled for {game_date_str}")
             return [], game_date_str, False
         
+        # IMPORTANT: NBA API sometimes returns duplicate rows - deduplicate by GAME_ID
+        games_df = games_df.drop_duplicates(subset=['GAME_ID'], keep='first')
+        
         # Try to get live status from live scoreboard
         live_status = {}
         try:
