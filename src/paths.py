@@ -43,6 +43,10 @@ FEATURE_CACHE_FILE = get_cache_path('feature_cache.pkl')
 MATCHUP_CACHE_FILE = get_cache_path('matchup_cache.pkl')
 PREDICTION_HISTORY_FILE = get_report_path('prediction_history.csv')
 
+# Enriched CSV datasets (portable, human-readable versions)
+ENRICHED_GAMES_CSV = get_cache_path('nba_games_enriched.csv')  # Games with rolling features
+MATCHUPS_CSV = get_cache_path('nba_matchups.csv')  # Full matchup dataset with all features
+
 XGB_PARAMS_FILE = get_config_path('best_xgb_params.json')
 
 # Ensemble model files

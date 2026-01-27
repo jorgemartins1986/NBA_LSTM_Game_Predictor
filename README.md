@@ -4,15 +4,15 @@
 
 An ensemble-based NBA game prediction system combining multiple models with stacking and Platt calibration. The system uses rolling team statistics, ELO ratings, and Dean Oliver's Four Factors to predict game outcomes.
 
-**Current ensemble accuracy: ~64%** (realistic for sports prediction; market edge is typically 52-55%)
+**Current ensemble accuracy: ~64.5%** (realistic for sports prediction; market edge is typically 52-55%)
 
 ### Models in the Ensemble
 | Model | Type | Accuracy | Purpose |
-|-------|------|----------|---------|
-| XGBoost | Gradient Boosting | 64.21% | Tree-based learner with tuned hyperparameters |
-| Random Forest | Ensemble Trees | 63.50% | Robust ensemble with good generalization |
-| Logistic Regression | Linear | 62.78% | L2-regularized baseline with balanced class weights |
-| LSTM | Neural Network | 64.82% | Attention-enhanced deep learning |
+|-------|------|----------|---------||
+| XGBoost | Gradient Boosting | 64.71% | Tree-based learner with tuned hyperparameters |
+| Random Forest | Ensemble Trees | 63.68% | Robust ensemble with feature selection (top 40) |
+| Logistic Regression | Linear | 63.37% | L2-regularized baseline with balanced class weights |
+| LSTM | Neural Network | 65.33% | Attention-enhanced deep learning |
 
 Predictions are combined via **ensemble voting** with optional **stacking meta-learner** and **Platt calibration**.
 
@@ -81,7 +81,9 @@ NBA_LSTM_Game_Predictor/
 │   └── ensemble_*.pkl            # Scalers, features, meta-model
 │
 ├── cache/                        # Data caches (git-ignored)
-│   ├── nba_games_cache.csv       # Historical game data
+│   ├── nba_games_cache.csv       # Raw historical game data (8 MB)
+│   ├── nba_games_enriched.csv    # Games with rolling features (70 MB)
+│   ├── nba_matchups.csv          # Full matchup dataset (37 MB, 117 features)
 │   ├── nba_elo_cache.pkl         # ELO ratings
 │   └── *_cache.pkl               # Feature caches
 │
@@ -113,10 +115,12 @@ python train.py
 This will:
 1. Load/update game data from cache (or download if first run)
 2. Prepare matchup features with chronological split (80% train / 20% test)
-3. Train all 4 models: XGBoost, Random Forest, Logistic Regression, LSTM
-4. Apply sample weighting (recent games weighted more heavily)
-5. Build stacking meta-model and Platt calibrator
-6. Save all artifacts to `models/`
+3. Compute all features: rolling stats, ELO, H2H, standings, fatigue
+4. **Export enriched datasets to CSV** (`cache/nba_matchups.csv`)
+5. Train all 4 models: XGBoost, Random Forest, Logistic Regression, LSTM
+6. Apply sample weighting (recent games weighted more heavily)
+7. Build stacking meta-model and Platt calibrator
+8. Save all artifacts to `models/`
 
 **Training time:** ~10-20 minutes (depending on hardware)
 
@@ -163,10 +167,20 @@ The prediction output includes bet-quality tiers based on model confidence:
 - **Back-to-back** indicator (played yesterday)
 - **3-in-4 nights** indicator (3 games in 4 days)
 
-### Head-to-Head Features (NEW)
+### Head-to-Head Features
 - H2H win rate (last 10 meetings)
 - H2H games played
 - H2H point differential
+
+### Standings Features (NEW)
+- **Conference rank** (1-15)
+- **League rank** (1-30)
+- **Wins/Losses** at time of game
+- **Win percentage**
+- **Games back** from conference leader
+- **Current streak** (positive = wins, negative = losses)
+- **Rank differential** between teams
+- **Win % differential** between teams
 
 ### ELO Ratings
 - Pre-game ELO for home/away
@@ -301,7 +315,35 @@ python predict_with_ensemble.py
 
 ---
 
-## 📈 Improving Accuracy
+## � Enriched Datasets
+
+Training automatically exports portable CSV datasets you can use in other projects:
+
+| File | Size | Description |
+|------|------|-------------|
+| `nba_games_cache.csv` | 8 MB | Raw game data from NBA API |
+| `nba_games_enriched.csv` | 70 MB | Games with all rolling features |
+| `nba_matchups.csv` | 37 MB | **28,000+ matchups with 117 features** |
+
+The `nba_matchups.csv` contains the complete feature-engineered dataset ready for ML:
+- Rolling statistics (20-game window)
+- ELO ratings and differentials
+- Head-to-head historical records
+- Standings at time of each game
+- Fatigue indicators (rest days, B2B, 3-in-4)
+- Target variable: `HOME_WIN` (1/0)
+
+**Use in other projects:**
+```python
+import pandas as pd
+df = pd.read_csv('cache/nba_matchups.csv')
+X = df.drop(['GAME_ID', 'GAME_DATE', 'HOME_WIN', 'HOME_TEAM_ID', 'AWAY_TEAM_ID'], axis=1)
+y = df['HOME_WIN']
+```
+
+---
+
+## �📈 Improving Accuracy
 
 ### Feature Ideas (not yet implemented)
 - Travel distance / timezone changes

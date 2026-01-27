@@ -14,7 +14,7 @@ import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
 from nba_api.live.nba.endpoints import scoreboard
-from nba_api.stats.endpoints import leaguegamefinder, scoreboardv2
+from nba_api.stats.endpoints import leaguegamefinder, scoreboardv2, leaguestandings
 from nba_api.stats.static import teams
 from .nba_predictor import FeatureEngineering, SumPooling1D
 from .paths import (
@@ -33,6 +33,65 @@ def get_eastern_date():
     """Get current date in Eastern Time (NBA's timezone)"""
     eastern = ZoneInfo('America/New_York')
     return datetime.now(eastern).strftime('%Y-%m-%d')
+
+
+def get_current_season():
+    """Get current NBA season string (e.g., '2024-25')"""
+    eastern = ZoneInfo('America/New_York')
+    now = datetime.now(eastern)
+    # NBA season starts in October
+    if now.month >= 10:
+        return f"{now.year}-{str(now.year + 1)[-2:]}"
+    else:
+        return f"{now.year - 1}-{str(now.year)[-2:]}"
+
+
+def get_live_standings():
+    """Fetch current standings from NBA API.
+    
+    Returns:
+        dict: {team_id: {WINS, LOSSES, WIN_PCT, CONF_RANK, LEAGUE_RANK, GAMES_BACK, STREAK}}
+    """
+    import time
+    
+    season = get_current_season()
+    print(f"📊 Fetching live standings for {season}...")
+    
+    try:
+        time.sleep(0.6)  # Rate limiting
+        ls = leaguestandings.LeagueStandings(season=season)
+        df = ls.get_data_frames()[0]
+        
+        standings = {}
+        for _, row in df.iterrows():
+            team_id = row['TeamID']
+            
+            # Parse streak (format like "W 5" or "L 3")
+            streak_str = row.get('strCurrentStreak', 'W 0')
+            try:
+                streak_parts = streak_str.split()
+                streak_val = int(streak_parts[1]) if len(streak_parts) > 1 else 0
+                streak = streak_val if streak_parts[0] == 'W' else -streak_val
+            except:
+                streak = 0
+            
+            standings[team_id] = {
+                'WINS': int(row['WINS']),
+                'LOSSES': int(row['LOSSES']),
+                'WIN_PCT': float(row['WinPCT']),
+                'CONF_RANK': int(row['PlayoffRank']),
+                'LEAGUE_RANK': int(row['LeagueRank']) if pd.notna(row.get('LeagueRank')) else int(row['PlayoffRank']),
+                'GAMES_BACK': float(row['ConferenceGamesBack']) if pd.notna(row.get('ConferenceGamesBack')) else 0.0,
+                'STREAK': streak
+            }
+        
+        print(f"   ✓ Got standings for {len(standings)} teams")
+        return standings
+        
+    except Exception as e:
+        print(f"   ⚠️ Could not fetch standings: {e}")
+        return {}
+
 
 # Enable unsafe deserialization for Lambda layers with Python lambdas
 keras.config.enable_unsafe_deserialization()
@@ -346,7 +405,7 @@ def compute_head_to_head(games_df, team_id, opponent_id, window=10):
     }
 
 
-def predict_game_ensemble(models, scalers, feature_cols, model_types, home_features, away_features, meta_clf=None, platt=None, ensemble_weights=None, ensemble_threshold=None, h2h_home=None, h2h_away=None):
+def predict_game_ensemble(models, scalers, feature_cols, model_types, home_features, away_features, meta_clf=None, platt=None, ensemble_weights=None, ensemble_threshold=None, h2h_home=None, h2h_away=None, home_standings=None, away_standings=None):
     """Predict game using ensemble"""
     
     # Combine features in correct order
@@ -357,18 +416,42 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
             # Check for H2H features
             if base_col.startswith('H2H_') and h2h_home:
                 feature_dict[col] = h2h_home.get(base_col, 0)
+            # Check for standings features
+            elif home_standings and base_col in home_standings:
+                feature_dict[col] = home_standings.get(base_col, 0)
             else:
-                feature_dict[col] = home_features.get(base_col, 0)
+                val = home_features.get(base_col, None)
+                feature_dict[col] = val if val is not None else 0
         elif col.startswith('AWAY_'):
             base_col = col.replace('AWAY_', '')
             # Check for H2H features
             if base_col.startswith('H2H_') and h2h_away:
                 feature_dict[col] = h2h_away.get(base_col, 0)
+            # Check for standings features
+            elif away_standings and base_col in away_standings:
+                feature_dict[col] = away_standings.get(base_col, 0)
             else:
-                feature_dict[col] = away_features.get(base_col, 0)
+                val = away_features.get(base_col, None)
+                feature_dict[col] = val if val is not None else 0
+        elif col == 'RANK_DIFF':
+            if home_standings and away_standings:
+                feature_dict[col] = home_standings.get('CONF_RANK', 8) - away_standings.get('CONF_RANK', 8)
+            else:
+                feature_dict[col] = 0
+        elif col == 'WIN_PCT_DIFF':
+            if home_standings and away_standings:
+                feature_dict[col] = home_standings.get('WIN_PCT', 0.5) - away_standings.get('WIN_PCT', 0.5)
+            else:
+                feature_dict[col] = 0
+        else:
+            # Unknown column type - default to 0
+            feature_dict[col] = 0
     
-    # Convert to array
-    features = np.array([feature_dict[col] for col in feature_cols]).reshape(1, -1)
+    # Convert to array and handle any remaining NaN
+    features = np.array([feature_dict.get(col, 0) for col in feature_cols]).reshape(1, -1)
+    
+    # Replace any remaining NaN with 0
+    features = np.nan_to_num(features, nan=0.0)
     
     # Get predictions from each model
     predictions = []
@@ -512,6 +595,9 @@ def main(single_model=None):
     
     print(f"✓ Found {len(todays_games)} games for {game_date}")
     
+    # Fetch live standings for standings features
+    live_standings = get_live_standings()
+    
     # Predict each game
     print("\n" + "="*70)
     print("ENSEMBLE PREDICTIONS")
@@ -543,6 +629,16 @@ def main(single_model=None):
         h2h_home = compute_head_to_head(games_df, game['home_team_id'], game['away_team_id'])
         h2h_away = compute_head_to_head(games_df, game['away_team_id'], game['home_team_id'])
         
+        # Get standings for this game
+        home_standings = live_standings.get(game['home_team_id'], {
+            'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+            'CONF_RANK': 8, 'LEAGUE_RANK': 15, 'GAMES_BACK': 0, 'STREAK': 0
+        })
+        away_standings = live_standings.get(game['away_team_id'], {
+            'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+            'CONF_RANK': 8, 'LEAGUE_RANK': 15, 'GAMES_BACK': 0, 'STREAK': 0
+        })
+        
         # Predict with ensemble
         try:
             prediction = predict_game_ensemble(
@@ -550,7 +646,8 @@ def main(single_model=None):
                 home_features, away_features,
                 meta_clf=meta_clf, platt=platt,
                 ensemble_weights=ensemble_weights, ensemble_threshold=ensemble_threshold,
-                h2h_home=h2h_home, h2h_away=h2h_away
+                h2h_home=h2h_home, h2h_away=h2h_away,
+                home_standings=home_standings, away_standings=away_standings
             )
             
             winner = home_team['full_name'] if prediction['predicted_winner'] == 'HOME' else away_team['full_name']
@@ -567,6 +664,11 @@ def main(single_model=None):
             away_b2b = "⚠️ B2B" if away_features.get('IS_BACK_TO_BACK', 0) == 1 else ""
             print(f"\n   😴 Rest: Home {home_rest}d {home_b2b} | Away {away_rest}d {away_b2b}")
             print(f"   🆚 H2H: Home {h2h_home['H2H_WIN_RATE']*100:.0f}% ({h2h_home['H2H_GAMES']} games)")
+            
+            # Show standings info
+            home_record = f"{home_standings['WINS']}-{home_standings['LOSSES']}"
+            away_record = f"{away_standings['WINS']}-{away_standings['LOSSES']}"
+            print(f"   📈 Standings: Home #{home_standings['CONF_RANK']} ({home_record}) | Away #{away_standings['CONF_RANK']} ({away_record})")
             
             # Show individual model predictions
             print(f"\n   🤖 Model Agreement: {prediction['model_agreement']*100:.1f}%")

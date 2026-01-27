@@ -55,7 +55,7 @@ class SumPooling1D(layers.Layer):
 
 
 # Path configuration
-from .paths import FEATURE_CACHE_FILE, MATCHUP_CACHE_FILE, get_model_path
+from .paths import FEATURE_CACHE_FILE, MATCHUP_CACHE_FILE, ENRICHED_GAMES_CSV, MATCHUPS_CSV, get_model_path
 
 # GPU Configuration - use GPU when available for neural networks
 def configure_gpu():
@@ -114,6 +114,252 @@ class NBADataFetcher:
             print(f"Fetched {len(df)} total game records")
             return df
         return None
+
+
+# Global cache for standings computation
+_STANDINGS_CACHE = {}
+
+# Eastern Conference team IDs (hardcoded for performance)
+EASTERN_IDS = {1610612738, 1610612751, 1610612752, 1610612755, 1610612761,  # Atlantic
+               1610612741, 1610612739, 1610612765, 1610612754, 1610612749,  # Central
+               1610612737, 1610612766, 1610612748, 1610612753, 1610612764}  # Southeast
+
+
+def precompute_all_standings(games_df):
+    """Pre-compute cumulative standings for all games efficiently.
+    
+    This uses vectorized operations to compute standings at each point in time,
+    then caches them for fast lookup during matchup creation.
+    
+    Returns:
+        dict: {(game_date, team_id): standings_dict}
+    """
+    global _STANDINGS_CACHE
+    
+    # Sort by date
+    games_sorted = games_df.sort_values('GAME_DATE').copy()
+    
+    # Pre-compute cumulative wins/losses for each team
+    all_teams = games_sorted['TEAM_ID'].unique()
+    all_dates = games_sorted['GAME_DATE'].unique()
+    
+    print(f"   Pre-computing standings for {len(all_dates)} unique dates...")
+    
+    # Create a wins/losses accumulator per team
+    team_records = {}  # {team_id: {'wins': 0, 'losses': 0, 'games': []}}
+    for tid in all_teams:
+        conf = 'East' if tid in EASTERN_IDS else 'West'
+        team_records[tid] = {'wins': 0, 'losses': 0, 'streak': 0, 'last_result': None, 'conf': conf}
+    
+    # Group games by date
+    date_groups = games_sorted.groupby('GAME_DATE')
+    
+    # Process each date in order
+    for date in all_dates:
+        if date in date_groups.groups:
+            # Snapshot BEFORE this date's games
+            # Compute rankings based on current records
+            standings_at_date = []
+            for tid, record in team_records.items():
+                total = record['wins'] + record['losses']
+                win_pct = record['wins'] / total if total > 0 else 0.5
+                standings_at_date.append({
+                    'TEAM_ID': tid,
+                    'WINS': record['wins'],
+                    'LOSSES': record['losses'],
+                    'WIN_PCT': win_pct,
+                    'CONF': record['conf'],
+                    'STREAK': record['streak']
+                })
+            
+            # Compute rankings (only if we have data)
+            if standings_at_date:
+                sdf = pd.DataFrame(standings_at_date)
+                
+                # Conference rank
+                sdf['CONF_RANK'] = sdf.groupby('CONF')['WIN_PCT'].rank(ascending=False, method='min').astype(int)
+                
+                # League rank
+                sdf['LEAGUE_RANK'] = sdf['WIN_PCT'].rank(ascending=False, method='min').astype(int)
+                
+                # Games back
+                for conf in ['East', 'West']:
+                    conf_mask = sdf['CONF'] == conf
+                    if conf_mask.any():
+                        leader_wins = sdf.loc[conf_mask, 'WINS'].max()
+                        leader_losses = sdf.loc[conf_mask, 'LOSSES'].min()
+                        sdf.loc[conf_mask, 'GAMES_BACK'] = ((leader_wins - sdf.loc[conf_mask, 'WINS']) + 
+                                                            (sdf.loc[conf_mask, 'LOSSES'] - leader_losses)) / 2
+                
+                # Store in cache
+                for _, row in sdf.iterrows():
+                    _STANDINGS_CACHE[(date, row['TEAM_ID'])] = {
+                        'WINS': row['WINS'],
+                        'LOSSES': row['LOSSES'],
+                        'WIN_PCT': row['WIN_PCT'],
+                        'CONF_RANK': row.get('CONF_RANK', 8),
+                        'LEAGUE_RANK': row.get('LEAGUE_RANK', 15),
+                        'GAMES_BACK': row.get('GAMES_BACK', 0),
+                        'STREAK': row['STREAK']
+                    }
+            
+            # NOW update records with this date's games
+            day_games = date_groups.get_group(date)
+            for _, game in day_games.iterrows():
+                tid = game['TEAM_ID']
+                result = game['WL']
+                
+                if result == 'W':
+                    team_records[tid]['wins'] += 1
+                    if team_records[tid]['last_result'] == 'W':
+                        team_records[tid]['streak'] += 1
+                    else:
+                        team_records[tid]['streak'] = 1
+                    team_records[tid]['last_result'] = 'W'
+                elif result == 'L':
+                    team_records[tid]['losses'] += 1
+                    if team_records[tid]['last_result'] == 'L':
+                        team_records[tid]['streak'] -= 1
+                    else:
+                        team_records[tid]['streak'] = -1
+                    team_records[tid]['last_result'] = 'L'
+    
+    print(f"   ✓ Cached standings for {len(_STANDINGS_CACHE)} (date, team) combinations")
+    return _STANDINGS_CACHE
+
+
+def get_standings_for_game(game_date, team_id):
+    """Get cached standings for a specific game date and team.
+    
+    Must call precompute_all_standings() first.
+    """
+    global _STANDINGS_CACHE
+    
+    default = {
+        'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+        'CONF_RANK': 8, 'LEAGUE_RANK': 15,
+        'GAMES_BACK': 0, 'STREAK': 0
+    }
+    
+    return _STANDINGS_CACHE.get((game_date, team_id), default)
+
+
+def compute_standings_at_date(games_df, target_date, team_id=None):
+    """Compute standings (wins, losses, rank) at a specific date from game history.
+    
+    This is the slow version - use precompute_all_standings + get_standings_for_game for batch operations.
+    
+    Args:
+        games_df: DataFrame with all games (must have TEAM_ID, GAME_DATE, WL columns)
+        target_date: Date to compute standings for (will use games before this date)
+        team_id: Optional - if provided, returns dict for that team only
+        
+    Returns:
+        If team_id is None: DataFrame with standings for all teams
+        If team_id provided: Dict with standings for that team
+    """
+    # Check cache first
+    global _STANDINGS_CACHE
+    if team_id is not None and (target_date, team_id) in _STANDINGS_CACHE:
+        return _STANDINGS_CACHE[(target_date, team_id)]
+    
+    # Filter to games BEFORE target date (crucial to avoid leakage)
+    prior_games = games_df[games_df['GAME_DATE'] < target_date].copy()
+    
+    if len(prior_games) == 0:
+        # No prior games - return default standings
+        if team_id is not None:
+            return {
+                'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+                'CONF_RANK': 8, 'LEAGUE_RANK': 15,
+                'GAMES_BACK': 0, 'STREAK': 0
+            }
+        return pd.DataFrame()
+    
+    # Compute wins/losses per team
+    standings_data = []
+    
+    for tid in prior_games['TEAM_ID'].unique():
+        team_prior = prior_games[prior_games['TEAM_ID'] == tid]
+        
+        wins = (team_prior['WL'] == 'W').sum()
+        losses = (team_prior['WL'] == 'L').sum()
+        total = wins + losses
+        win_pct = wins / total if total > 0 else 0.5
+        
+        # Compute current streak
+        recent = team_prior.sort_values('GAME_DATE', ascending=False)
+        streak = 0
+        if len(recent) > 0:
+            last_result = recent.iloc[0]['WL']
+            for _, row in recent.iterrows():
+                if row['WL'] == last_result:
+                    streak += 1 if last_result == 'W' else -1
+                else:
+                    break
+        
+        conf = 'East' if tid in EASTERN_IDS else 'West'
+        standings_data.append({
+            'TEAM_ID': tid,
+            'WINS': wins,
+            'LOSSES': losses,
+            'WIN_PCT': win_pct,
+            'CONFERENCE': conf,
+            'STREAK': streak
+        })
+    
+    standings_df = pd.DataFrame(standings_data)
+    
+    if len(standings_df) == 0:
+        if team_id is not None:
+            return {
+                'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+                'CONF_RANK': 8, 'LEAGUE_RANK': 15,
+                'GAMES_BACK': 0, 'STREAK': 0
+            }
+        return pd.DataFrame()
+    
+    # Compute conference rank
+    standings_df['CONF_RANK'] = standings_df.groupby('CONFERENCE')['WIN_PCT'].rank(
+        ascending=False, method='min'
+    ).astype(int)
+    
+    # Compute league rank
+    standings_df['LEAGUE_RANK'] = standings_df['WIN_PCT'].rank(
+        ascending=False, method='min'
+    ).astype(int)
+    
+    # Compute games back from conference leader
+    for conf in ['East', 'West']:
+        conf_mask = standings_df['CONFERENCE'] == conf
+        if conf_mask.any():
+            leader_wins = standings_df.loc[conf_mask, 'WINS'].max()
+            leader_losses = standings_df.loc[conf_mask, 'LOSSES'].min()
+            standings_df.loc[conf_mask, 'GAMES_BACK'] = (
+                (leader_wins - standings_df.loc[conf_mask, 'WINS']) + 
+                (standings_df.loc[conf_mask, 'LOSSES'] - leader_losses)
+            ) / 2
+    
+    if team_id is not None:
+        team_row = standings_df[standings_df['TEAM_ID'] == team_id]
+        if len(team_row) == 0:
+            return {
+                'WINS': 0, 'LOSSES': 0, 'WIN_PCT': 0.5,
+                'CONF_RANK': 8, 'LEAGUE_RANK': 15,
+                'GAMES_BACK': 0, 'STREAK': 0
+            }
+        row = team_row.iloc[0]
+        return {
+            'WINS': row['WINS'],
+            'LOSSES': row['LOSSES'],
+            'WIN_PCT': row['WIN_PCT'],
+            'CONF_RANK': row['CONF_RANK'],
+            'LEAGUE_RANK': row['LEAGUE_RANK'],
+            'GAMES_BACK': row['GAMES_BACK'],
+            'STREAK': row['STREAK']
+        }
+    
+    return standings_df
 
 
 class FeatureEngineering:
@@ -384,7 +630,7 @@ class NBAPredictor:
             
             all_features_df = pd.concat(all_team_features, ignore_index=True)
         
-        # Save to cache
+        # Save to cache (pickle for fast loading)
         try:
             max_date = games_df['GAME_DATE'].max()
             with open(FEATURE_CACHE_FILE, 'wb') as f:
@@ -392,6 +638,13 @@ class NBAPredictor:
             print(f"💾 Cached features up to {max_date}")
         except Exception as e:
             print(f"⚠️ Could not save cache: {e}")
+        
+        # Also save enriched games to CSV (portable, human-readable)
+        try:
+            all_features_df.to_csv(ENRICHED_GAMES_CSV, index=False)
+            print(f"📄 Saved enriched games CSV: {ENRICHED_GAMES_CSV}")
+        except Exception as e:
+            print(f"⚠️ Could not save enriched CSV: {e}")
         
         # CRITICAL: Remove rows where rolling features are NaN (these are the first games without enough history)
         roll_cols = [col for col in all_features_df.columns if 'ROLL' in col or col == 'WIN_STREAK']
@@ -430,6 +683,10 @@ class NBAPredictor:
             print(f"📊 Creating matchups for {len(new_features_df['GAME_ID'].unique())} new games...")
         else:
             new_features_df = all_features_df
+        
+        # Pre-compute standings for all dates (fast vectorized approach)
+        print("📈 Pre-computing standings for all games...")
+        precompute_all_standings(games_df)
         
         # Create matchups (each game has 2 rows, one per team)
         matchups = []
@@ -503,6 +760,30 @@ class NBAPredictor:
             matchup['AWAY_H2H_GAMES'] = away_h2h['H2H_GAMES']
             matchup['AWAY_H2H_PTS_DIFF'] = away_h2h['H2H_PTS_DIFF']
             
+            # Add STANDINGS features (using pre-computed cache for speed)
+            home_standings = get_standings_for_game(home_data['GAME_DATE'], home_data['TEAM_ID'])
+            away_standings = get_standings_for_game(away_data['GAME_DATE'], away_data['TEAM_ID'])
+            
+            matchup['HOME_WINS'] = home_standings['WINS']
+            matchup['HOME_LOSSES'] = home_standings['LOSSES']
+            matchup['HOME_WIN_PCT'] = home_standings['WIN_PCT']
+            matchup['HOME_CONF_RANK'] = home_standings['CONF_RANK']
+            matchup['HOME_LEAGUE_RANK'] = home_standings['LEAGUE_RANK']
+            matchup['HOME_GAMES_BACK'] = home_standings['GAMES_BACK']
+            matchup['HOME_STREAK'] = home_standings['STREAK']
+            
+            matchup['AWAY_WINS'] = away_standings['WINS']
+            matchup['AWAY_LOSSES'] = away_standings['LOSSES']
+            matchup['AWAY_WIN_PCT'] = away_standings['WIN_PCT']
+            matchup['AWAY_CONF_RANK'] = away_standings['CONF_RANK']
+            matchup['AWAY_LEAGUE_RANK'] = away_standings['LEAGUE_RANK']
+            matchup['AWAY_GAMES_BACK'] = away_standings['GAMES_BACK']
+            matchup['AWAY_STREAK'] = away_standings['STREAK']
+            
+            # Derived standings features
+            matchup['RANK_DIFF'] = home_standings['CONF_RANK'] - away_standings['CONF_RANK']  # Negative = home is better
+            matchup['WIN_PCT_DIFF'] = home_standings['WIN_PCT'] - away_standings['WIN_PCT']  # Positive = home is better
+            
             matchups.append(matchup)
         
         new_matchup_df = pd.DataFrame(matchups)
@@ -517,7 +798,7 @@ class NBAPredictor:
             matchup_df = new_matchup_df
             print(f"Created {len(matchup_df)} matchups")
         
-        # Save matchup cache
+        # Save matchup cache (pickle for fast loading)
         try:
             max_matchup_date = matchup_df['GAME_DATE'].max()
             with open(MATCHUP_CACHE_FILE, 'wb') as f:
@@ -525,6 +806,14 @@ class NBAPredictor:
             print(f"💾 Cached matchups up to {max_matchup_date}")
         except Exception as e:
             print(f"⚠️ Could not save matchup cache: {e}")
+        
+        # Also save matchups to CSV (portable, human-readable, usable in other projects)
+        try:
+            matchup_df.to_csv(MATCHUPS_CSV, index=False)
+            print(f"📄 Saved matchups CSV: {MATCHUPS_CSV}")
+            print(f"   → {len(matchup_df)} matchups with {len(matchup_df.columns)} features each")
+        except Exception as e:
+            print(f"⚠️ Could not save matchups CSV: {e}")
         
         # DEBUG: Check for any suspiciously perfect correlations
         if len(matchup_df) > 0:
