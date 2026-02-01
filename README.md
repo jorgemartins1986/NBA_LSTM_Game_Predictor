@@ -82,6 +82,7 @@ NBA_LSTM_Game_Predictor/
 │   ├── nba_games_cache.csv       # Raw historical game data (8 MB)
 │   ├── nba_games_enriched.csv    # Games with rolling features (70 MB)
 │   ├── nba_matchups.csv          # Full matchup dataset (37 MB, 117 features)
+│   ├── nba_historical_odds.csv   # Historical betting odds (optional)
 │   ├── nba_elo_cache.pkl         # ELO ratings
 │   └── *_cache.pkl               # Feature caches
 │
@@ -91,6 +92,9 @@ NBA_LSTM_Game_Predictor/
 ├── reports/                      # Training reports (git-ignored)
 │   └── model_reports_*.txt/.json
 │
+├── scripts/                      # Utility scripts
+│   └── setup_odds_api.py         # Odds API setup & test
+│
 ├── docs/                         # Documentation
 │   ├── PREDICTIONGUIDE.md
 │   ├── NBAPREDICTIONCEILING.md
@@ -99,6 +103,51 @@ NBA_LSTM_Game_Predictor/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 💰 Betting Odds Integration (Optional)
+
+The system can optionally fetch live bookmaker odds to:
+- Display odds alongside model predictions
+- Show "value" when model disagrees with the market
+- (Future) Use odds as training features
+
+### Setup
+
+1. Get a free API key from [The-Odds-API](https://the-odds-api.com/) (500 free credits/month)
+2. Set the environment variable:
+   ```powershell
+   # PowerShell
+   $env:ODDS_API_KEY = "your_api_key_here"
+   
+   # Or permanently in your profile
+   [Environment]::SetEnvironmentVariable("ODDS_API_KEY", "your_key", "User")
+   ```
+3. Run predictions - odds will appear automatically:
+   ```bash
+   python main.py predict
+   ```
+
+### What You'll See
+
+```
+🏆 Predicted Winner: Boston Celtics
+📊 Confidence: 32.5%
+🏠 Home Win Prob: 66.2%
+✈️  Away Win Prob: 33.8%
+💰 Bookmaker Odds: Home 1.52 (66%) | Away 2.65 (38%)
+🔥 Value: Model 66.2% vs Market 65.8% (+0.4%)
+```
+
+### API Costs
+
+| Endpoint | Credits | What You Get |
+|----------|---------|--------------|
+| Live odds | 1/call | Today's games from EU bookmakers |
+| Historical | 10/call | One date of historical odds |
+
+With 500 free credits/month: ~500 live calls or ~50 historical dates
 
 ---
 

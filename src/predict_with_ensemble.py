@@ -10,6 +10,7 @@ Usage:
 import pandas as pd
 import numpy as np
 import pickle
+import os
 import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
@@ -28,6 +29,14 @@ try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:
     from backports.zoneinfo import ZoneInfo
+
+# Optional odds API integration
+try:
+    from .odds_api import OddsAPIClient, get_live_odds_for_predictions
+    ODDS_API_AVAILABLE = True
+except ImportError:
+    ODDS_API_AVAILABLE = False
+    print("ℹ️  Odds API not available (optional)")
 
 def get_eastern_date():
     """Get current date in Eastern Time (NBA's timezone)"""
@@ -91,6 +100,104 @@ def get_live_standings():
     except Exception as e:
         print(f"   ⚠️ Could not fetch standings: {e}")
         return {}
+
+
+def get_live_odds():
+    """
+    Fetch live betting odds for today's NBA games.
+    
+    Returns:
+        dict: {game_key: odds_features} where game_key is "home_team_vs_away_team" (lowercase)
+        
+    Note: Requires ODDS_API_KEY environment variable to be set.
+          Get free API key at: https://the-odds-api.com/
+    """
+    if not ODDS_API_AVAILABLE:
+        return {}
+    
+    # Check if API key is configured
+    api_key = os.environ.get('ODDS_API_KEY')
+    if not api_key:
+        return {}
+    
+    print("💰 Fetching live betting odds...")
+    try:
+        odds = get_live_odds_for_predictions()
+        if odds:
+            print(f"   ✓ Got odds for {len(odds)} games")
+        return odds
+    except Exception as e:
+        print(f"   ⚠️ Could not fetch odds: {e}")
+        return {}
+
+
+def match_game_to_odds(home_team_name: str, away_team_name: str, odds_dict: dict) -> dict:
+    """
+    Match a game to its odds using fuzzy team name matching.
+    
+    Args:
+        home_team_name: Full home team name (e.g., "Los Angeles Lakers")
+        away_team_name: Full away team name
+        odds_dict: Dict from get_live_odds()
+        
+    Returns:
+        Odds features dict or empty dict if not found
+    """
+    if not odds_dict:
+        return {}
+    
+    home_lower = home_team_name.lower()
+    away_lower = away_team_name.lower()
+    
+    # Try exact match first
+    key = f"{home_lower}_vs_{away_lower}"
+    if key in odds_dict:
+        return odds_dict[key]
+    
+    # Try partial matching
+    for game_key, features in odds_dict.items():
+        parts = game_key.split('_vs_')
+        if len(parts) != 2:
+            continue
+            
+        odds_home, odds_away = parts
+        
+        # Check if key parts of team names match
+        home_words = set(home_lower.split())
+        away_words = set(away_lower.split())
+        odds_home_words = set(odds_home.split())
+        odds_away_words = set(odds_away.split())
+        
+        # Remove common words
+        common = {'the', 'a', 'an'}
+        home_words -= common
+        away_words -= common
+        odds_home_words -= common
+        odds_away_words -= common
+        
+        # Check for overlap
+        if (len(home_words & odds_home_words) >= 1 and
+            len(away_words & odds_away_words) >= 1):
+            return features
+            
+    return {}
+
+
+def format_odds_display(odds_features: dict) -> str:
+    """Format odds for display in predictions."""
+    if not odds_features:
+        return ""
+    
+    home_odds = odds_features.get('HOME_AVG_ODDS', 0)
+    away_odds = odds_features.get('AWAY_AVG_ODDS', 0)
+    home_prob = odds_features.get('HOME_IMPLIED_PROB', 0)
+    away_prob = odds_features.get('AWAY_IMPLIED_PROB', 0)
+    spread = odds_features.get('HOME_ODDS_SPREAD', 0)
+    
+    if home_odds and away_odds:
+        return (f"   💰 Bookmaker Odds: Home {home_odds:.2f} ({home_prob*100:.0f}%) | "
+                f"Away {away_odds:.2f} ({away_prob*100:.0f}%)")
+    return ""
 
 
 # Enable unsafe deserialization for Lambda layers with Python lambdas
@@ -405,8 +512,30 @@ def compute_head_to_head(games_df, team_id, opponent_id, window=10):
     }
 
 
-def predict_game_ensemble(models, scalers, feature_cols, model_types, home_features, away_features, meta_clf=None, platt=None, ensemble_weights=None, ensemble_threshold=None, h2h_home=None, h2h_away=None, home_standings=None, away_standings=None):
-    """Predict game using ensemble"""
+def predict_game_ensemble(models, scalers, feature_cols, model_types, home_features, away_features, meta_clf=None, platt=None, ensemble_weights=None, ensemble_threshold=None, h2h_home=None, h2h_away=None, home_standings=None, away_standings=None, home_odds=None, away_odds=None):
+    """Predict game using ensemble
+    
+    Args:
+        models: List of trained models
+        scalers: List of scalers for each model
+        feature_cols: List of feature column names
+        model_types: List of model type strings
+        home_features: Dict of home team rolling features
+        away_features: Dict of away team rolling features
+        meta_clf: Optional stacking meta-classifier
+        platt: Optional Platt calibration model
+        ensemble_weights: Optional weights for ensemble averaging
+        ensemble_threshold: Optional threshold for weighted ensemble
+        h2h_home: Head-to-head features from home team perspective
+        h2h_away: Head-to-head features from away team perspective
+        home_standings: Current standings for home team
+        away_standings: Current standings for away team
+        home_odds: Odds features for home team (from odds API)
+        away_odds: Odds features for away team (from odds API)
+        
+    Returns:
+        Dict with prediction results including probability, confidence, etc.
+    """
     
     # Combine features in correct order
     feature_dict = {}
@@ -419,6 +548,9 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
             # Check for standings features
             elif home_standings and base_col in home_standings:
                 feature_dict[col] = home_standings.get(base_col, 0)
+            # Check for odds features (e.g., HOME_AVG_ODDS, HOME_IMPLIED_PROB)
+            elif home_odds and base_col in ['AVG_ODDS', 'BEST_ODDS', 'WORST_ODDS', 'ODDS_SPREAD', 'IMPLIED_PROB']:
+                feature_dict[col] = home_odds.get(f'HOME_{base_col}', 0)
             else:
                 val = home_features.get(base_col, None)
                 feature_dict[col] = val if val is not None else 0
@@ -430,6 +562,9 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
             # Check for standings features
             elif away_standings and base_col in away_standings:
                 feature_dict[col] = away_standings.get(base_col, 0)
+            # Check for odds features
+            elif away_odds and base_col in ['AVG_ODDS', 'BEST_ODDS', 'WORST_ODDS', 'ODDS_SPREAD', 'IMPLIED_PROB']:
+                feature_dict[col] = away_odds.get(f'AWAY_{base_col}', 0)
             else:
                 val = away_features.get(base_col, None)
                 feature_dict[col] = val if val is not None else 0
@@ -443,6 +578,9 @@ def predict_game_ensemble(models, scalers, feature_cols, model_types, home_featu
                 feature_dict[col] = home_standings.get('WIN_PCT', 0.5) - away_standings.get('WIN_PCT', 0.5)
             else:
                 feature_dict[col] = 0
+        elif col == 'BOOKMAKER_COUNT':
+            # Odds feature - number of bookmakers
+            feature_dict[col] = home_odds.get('BOOKMAKER_COUNT', 0) if home_odds else 0
         else:
             # Unknown column type - default to 0
             feature_dict[col] = 0
@@ -598,6 +736,9 @@ def main(single_model=None):
     # Fetch live standings for standings features
     live_standings = get_live_standings()
     
+    # Fetch live odds (optional - requires API key)
+    live_odds = get_live_odds()
+    
     # Predict each game
     print("\n" + "="*70)
     print("ENSEMBLE PREDICTIONS")
@@ -639,6 +780,9 @@ def main(single_model=None):
             'CONF_RANK': 8, 'LEAGUE_RANK': 15, 'GAMES_BACK': 0, 'STREAK': 0
         })
         
+        # Get odds for this game (if available)
+        game_odds = match_game_to_odds(home_team['full_name'], away_team['full_name'], live_odds)
+        
         # Predict with ensemble
         try:
             prediction = predict_game_ensemble(
@@ -647,7 +791,8 @@ def main(single_model=None):
                 meta_clf=meta_clf, platt=platt,
                 ensemble_weights=ensemble_weights, ensemble_threshold=ensemble_threshold,
                 h2h_home=h2h_home, h2h_away=h2h_away,
-                home_standings=home_standings, away_standings=away_standings
+                home_standings=home_standings, away_standings=away_standings,
+                home_odds=game_odds, away_odds=game_odds  # Same dict has both HOME_* and AWAY_* features
             )
             
             winner = home_team['full_name'] if prediction['predicted_winner'] == 'HOME' else away_team['full_name']
@@ -656,6 +801,18 @@ def main(single_model=None):
             print(f"   📊 Confidence: {prediction['confidence']*100:.1f}%")
             print(f"   🏠 Home Win Prob: {prediction['home_win_probability']*100:.1f}%")
             print(f"   ✈️  Away Win Prob: {prediction['away_win_probability']*100:.1f}%")
+            
+            # Show bookmaker odds (if available)
+            odds_display = format_odds_display(game_odds)
+            if odds_display:
+                print(odds_display)
+                # Show value comparison (model vs market)
+                model_prob = prediction['home_win_probability']
+                market_prob = game_odds.get('HOME_IMPLIED_PROB', 0)
+                if market_prob > 0:
+                    value_diff = (model_prob - market_prob) * 100
+                    value_emoji = "🔥" if abs(value_diff) > 5 else "🤔"
+                    print(f"   {value_emoji} Value: Model {model_prob*100:.1f}% vs Market {market_prob*100:.1f}% ({value_diff:+.1f}%)")
             
             # Show fatigue info if available
             home_rest = home_features.get('DAYS_REST', 'N/A')
