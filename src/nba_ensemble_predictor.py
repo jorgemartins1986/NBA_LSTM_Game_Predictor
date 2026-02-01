@@ -34,28 +34,9 @@ from .paths import (
     ENSEMBLE_TYPES_FILE, ENSEMBLE_SCALERS_FILE, ENSEMBLE_FEATURES_FILE,
     ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE
 )
+from .utils import configure_gpu
 import xgboost as xgb
 from tqdm import tqdm
-
-# GPU Configuration - use GPU when available
-def configure_gpu():
-    """Configure TensorFlow to use GPU if available, with memory growth"""
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            # Enable memory growth to avoid allocating all GPU memory at once
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            print(f"🎮 GPU ENABLED: {len(gpus)} GPU(s) detected")
-            for i, gpu in enumerate(gpus):
-                print(f"   GPU {i}: {gpu.name}")
-            return True
-        except RuntimeError as e:
-            print(f"⚠️ GPU configuration error: {e}")
-            return False
-    else:
-        print("💻 No GPU detected, using CPU")
-        return False
 
 # Configure GPU at import time
 GPU_AVAILABLE = configure_gpu()

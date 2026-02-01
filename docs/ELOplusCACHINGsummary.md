@@ -55,7 +55,7 @@
 ### First Time Setup:
 
 ```bash
-python nba_data_manager.py
+python main.py train
 ```
 
 This downloads all data and calculates ELO ratings. Takes ~15-20 mins.
@@ -63,7 +63,7 @@ This downloads all data and calculates ELO ratings. Takes ~15-20 mins.
 ### Train Ensemble (Now with ELO):
 
 ```bash
-python ensemble_predictor.py
+python main.py train
 ```
 
 **Now:**
@@ -74,7 +74,7 @@ python ensemble_predictor.py
 ### Update Data (Weekly):
 
 ```python
-from nba_data_manager import NBADataManager
+from src.nba_data_manager import NBADataManager
 
 manager = NBADataManager()
 games_df = manager.update_current_season()  # Quick!
@@ -135,7 +135,7 @@ pip install xgboost pandas numpy scikit-learn tensorflow
 ### Step 2: Initial Data Download
 
 ```bash
-python nba_data_manager.py
+python main.py train
 ```
 
 **Output:**
@@ -151,12 +151,12 @@ DOWNLOADING ALL HISTORICAL DATA
 ### Step 3: Train Ensemble
 
 ```bash
-python ensemble_predictor.py
+python main.py train
 ```
 
 **Now includes ELO automatically!**
 
-The `nba_predictor.py`'s `FeatureEngineering` class will automatically create rolling ELO features:
+The `src/nba_predictor.py`'s `FeatureEngineering` class will automatically create rolling ELO features:
 - `ELO_HOME_ROLL_MEAN` - Average recent ELO
 - `ELO_DIFF_ROLL_MEAN` - Average ELO advantage
 - `ELO_PROB_HOME_ROLL_MEAN` - Average win probability
@@ -266,14 +266,14 @@ ratings = manager.get_current_elo_ratings()
 
 ```bash
 # Force refresh cache (if data seems stale):
-rm nba_games_cache.csv nba_elo_cache.pkl
-python nba_data_manager.py
+Remove-Item cache/nba_games_cache.csv, cache/nba_elo_cache.pkl -ErrorAction SilentlyContinue
+python main.py train
 ```
 
 ### Tip 3: ELO K-Factor Tuning
 
 ```python
-# In nba_data_manager.py, experiment with:
+# In src/nba_data_manager.py, experiment with:
 ELORatingSystem(k_factor=20)  # Current (moderate volatility)
 ELORatingSystem(k_factor=15)  # More stable
 ELORatingSystem(k_factor=25)  # More reactive to recent games

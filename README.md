@@ -66,10 +66,13 @@ NBA_LSTM_Game_Predictor/
 ├── src/                          # Core source code
 │   ├── __init__.py
 │   ├── paths.py                  # Path configuration
+│   ├── utils.py                  # Shared utilities (GPU config)
 │   ├── nba_data_manager.py       # Data fetching & ELO ratings
 │   ├── nba_predictor.py          # Feature engineering
 │   ├── nba_ensemble_predictor.py # Ensemble training
-│   └── predict_with_ensemble.py  # Prediction logic
+│   ├── predict_with_ensemble.py  # Prediction logic
+│   ├── update_prediction_results.py # Result tracking
+│   └── odds_api.py               # Live betting odds integration
 │
 ├── models/                       # Trained models (git-ignored)
 │   ├── nba_ensemble_xgboost_1.json

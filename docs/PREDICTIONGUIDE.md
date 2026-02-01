@@ -15,7 +15,7 @@ The code has been updated with:
 - **Better callbacks** (monitors accuracy, saves best model)
 
 ```bash
-python nba_predictor.py
+python main.py train
 ```
 
 **Expected improvement:**
@@ -58,19 +58,17 @@ python predict_todays_games.py
 In Python:
 
 ```python
-from nba_predictor import NBADataFetcher, NBAPredictor, predict_specific_game
+from src.nba_data_manager import NBADataFetcher
+from src.nba_predictor import NBAPredictor
 from tensorflow import keras
 
 # Load model
 predictor = NBAPredictor()
-predictor.model = keras.models.load_model('nba_model_best.keras')
+predictor.model = keras.models.load_model('models/nba_model_best.keras')
 
 # Get latest data
 fetcher = NBADataFetcher(seasons=['2024-25'])
 games_df = fetcher.fetch_games()
-
-# Predict any matchup!
-predict_specific_game(predictor, "Lakers", "Warriors", games_df)
 ```
 
 ---
@@ -103,17 +101,17 @@ predict_specific_game(predictor, "Lakers", "Warriors", games_df)
 
 ### Train Model (do this first!)
 ```bash
-python nba_predictor.py
+python main.py train
 ```
 
 ### Get Today's Predictions
 ```bash
-python predict_todays_games.py
+python main.py predict
 ```
 
-### Check for Data Leakage
+### View Prediction Statistics
 ```bash
-python nba_feature_analysis.py
+python main.py --stats
 ```
 
 ---
@@ -133,7 +131,7 @@ After training, you'll have:
 ### 1. Retrain Weekly
 ```bash
 # Fresh data = better predictions
-python nba_predictor.py
+python main.py train
 ```
 
 ### 2. Check Confidence Scores
@@ -195,19 +193,20 @@ Try these improvements:
 
 1. **Re-train with 6 seasons:**
    ```bash
-   python nba_predictor.py
+   python main.py train
    # Wait ~30 mins for better accuracy
    ```
 
 2. **Get today's predictions:**
    ```bash
-   python predict_todays_games.py
+   python main.py predict
    ```
 
 3. **Track your results:**
-   - Save predictions
-   - Compare with actual outcomes
-   - Calculate real-world accuracy
+   ```bash
+   python main.py --stats
+   python main.py --updateresults
+   ```
 
 4. **Improve further:**
    - Add injury data

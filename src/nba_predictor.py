@@ -56,20 +56,9 @@ class SumPooling1D(layers.Layer):
 
 # Path configuration
 from .paths import FEATURE_CACHE_FILE, MATCHUP_CACHE_FILE, ENRICHED_GAMES_CSV, MATCHUPS_CSV, get_model_path
+from .utils import configure_gpu
 
-# GPU Configuration - use GPU when available for neural networks
-def configure_gpu():
-    """Configure TensorFlow to use GPU if available"""
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            return True
-        except RuntimeError:
-            return False
-    return False
-
+# Configure GPU at import time
 GPU_AVAILABLE = configure_gpu()
 
 # Visualization
@@ -83,37 +72,8 @@ def _compute_team_features_parallel(team_id, games_df, window_size):
     return fe.create_rolling_features(games_df, team_id)
 
 
-class NBADataFetcher:
-    """Fetch and process NBA game data"""
-    
-    def __init__(self, seasons=['2022-23', '2023-24', '2024-25']):
-        self.seasons = seasons
-        self.all_teams = teams.get_teams()
-        
-    def fetch_games(self):
-        """Fetch all games for specified seasons"""
-        print("Fetching NBA game data...")
-        all_games = []
-        
-        for season in self.seasons:
-            print(f"Fetching {season} season...")
-            try:
-                gamefinder = leaguegamefinder.LeagueGameFinder(
-                    season_nullable=season,
-                    league_id_nullable='00'
-                )
-                games = gamefinder.get_data_frames()[0]
-                all_games.append(games)
-            except Exception as e:
-                print(f"Error fetching {season}: {e}")
-        
-        if all_games:
-            df = pd.concat(all_games, ignore_index=True)
-            df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
-            df = df.sort_values('GAME_DATE').reset_index(drop=True)
-            print(f"Fetched {len(df)} total game records")
-            return df
-        return None
+# Import NBADataFetcher from nba_data_manager (single source of truth)
+from .nba_data_manager import NBADataFetcher
 
 
 # Global cache for standings computation
