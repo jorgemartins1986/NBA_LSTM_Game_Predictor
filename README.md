@@ -29,30 +29,27 @@ pip install -r requirements.txt
 ### 2. Predict Today's Games
 
 ```bash
-python predict.py
+python main.py predict
 ```
 
-**Example output:**
-```
-🏀 Game 1/3
-   Chicago Bulls @ Boston Celtics
-   🏆 Predicted Winner: Boston Celtics
-   📊 Confidence: 42.0%
-   🏠 Home Win Prob: 71.0%
-
-   🤖 Model Agreement: 94%
-      XGBoost:    72.1%
-      RF:         70.3%
-      Logistic:   69.8%
-      LSTM:       71.5%
-
-   📋 💰 STRONG BET
-```
-
-### 3. Train the Ensemble
+### 3. View Detailed Statistics
 
 ```bash
-python train.py
+python main.py --stats
+```
+
+### 4. Train the Ensemble
+
+```bash
+python main.py train
+```
+
+### 5. Update Results After Games
+
+```bash
+python main.py --updateresults          # Update yesterday's games
+python main.py --updateresults --all    # Update all pending
+python main.py --updateresults 2026-01-15  # Specific date
 ```
 
 ---
@@ -64,6 +61,7 @@ NBA_LSTM_Game_Predictor/
 │
 ├── train.py                      # Entry point: train ensemble
 ├── predict.py                    # Entry point: make predictions
+├── main.py                       # Unified CLI (predict, train, stats, update)
 │
 ├── src/                          # Core source code
 │   ├── __init__.py
@@ -213,13 +211,13 @@ The system automatically tracks all predictions and results for performance anal
 
 ```bash
 # 1. Run predictions (auto-saves to history)
-python predict.py
+python main.py predict
 
 # 2. Next day: update with actual results
-python -m src.update_prediction_results
+python main.py --updateresults
 
-# 3. View accuracy statistics anytime
-python -m src.update_prediction_results --stats
+# 3. View detailed accuracy statistics
+python main.py --stats
 ```
 
 ### History File Format
@@ -243,42 +241,30 @@ Predictions are saved to `reports/prediction_history.csv`:
 
 ```bash
 # Update yesterday's results (default)
-python -m src.update_prediction_results
+python main.py --updateresults
 
 # Update specific date
-python -m src.update_prediction_results 2026-01-17
+python main.py --updateresults 2026-01-17
 
 # Update all pending results
-python -m src.update_prediction_results --all
+python main.py --updateresults --all
 
-# View statistics only
-python -m src.update_prediction_results --stats
+# View detailed statistics only
+python main.py --stats
 ```
 
 ### Statistics Output
 
-```
-============================================================
-PREDICTION HISTORY STATISTICS
-============================================================
-
-📊 Overall: 6/9 correct (66.7%)
-
-📈 By Bet Quality Tier:
-   EXCELLENT      1/  1 (100.0%)
-   GOOD           1/  2 ( 50.0%)
-   MODERATE       1/  2 ( 50.0%)
-   RISKY          2/  2 (100.0%)
-   SKIP           1/  2 ( 50.0%)
-
-🎯 By Confidence Level:
-   40%+           1/  1 (100.0%)
-   30-40%         1/  2 ( 50.0%)
-   ...
-
-📅 Last 7 days: 6/9 (66.7%)
-============================================================
-```
+The `--stats` command shows comprehensive breakdown:
+- **Overall accuracy** with date range
+- **By bet quality tier** with estimated ROI
+- **By confidence level** (10 granular buckets)
+- **By model agreement** (6 buckets)
+- **By home win probability** (calibration check)
+- **Time-based performance** (3/7/14/30 days)
+- **Day of week analysis**
+- **Streaks** (current, best win, worst loss)
+- **Profitable filters** (combinations that beat the vig)
 
 ### Recommended Retraining Schedule
 
