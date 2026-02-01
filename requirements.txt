@@ -8,3 +8,5 @@ seaborn
 xgboost
 joblib
 tqdm
+python-dotenv
+requests

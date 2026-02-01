@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
+from pathlib import Path
 import tensorflow as tf
 from tensorflow import keras
 import xgboost as xgb
@@ -29,6 +30,14 @@ try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:
     from backports.zoneinfo import ZoneInfo
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / '.env'
+    load_dotenv(env_path)
+except ImportError:
+    pass  # dotenv not installed, will use OS environment variables
 
 # Optional odds API integration
 try:

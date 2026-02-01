@@ -11,11 +11,14 @@ Supports European decimal odds format (1.XX).
 API Documentation: https://the-odds-api.com/liveapi/guides/v4/
 
 Usage:
-    # Set API key in environment or pass directly
-    export ODDS_API_KEY="your_api_key_here"
+    # Set API key in .env file (recommended):
+    # ODDS_API_KEY=your_api_key_here
     
-    # Or in Python:
-    client = OddsAPIClient(api_key="your_api_key")
+    # Or set environment variable:
+    # export ODDS_API_KEY="your_api_key_here"
+    
+    # Or pass directly in Python:
+    # client = OddsAPIClient(api_key="your_api_key")
 """
 
 import os
@@ -27,6 +30,15 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    # Find .env file in project root
+    env_path = Path(__file__).parent.parent / '.env'
+    load_dotenv(env_path)
+except ImportError:
+    pass  # dotenv not installed, will use OS environment variables
 
 from .paths import get_cache_path, CACHE_DIR
 
@@ -47,7 +59,7 @@ class OddsAPIClient:
         
         Args:
             api_key: API key for The-Odds-API. If not provided, reads from
-                     ODDS_API_KEY environment variable.
+                     ODDS_API_KEY environment variable or .env file.
         """
         self.api_key = api_key or os.environ.get('ODDS_API_KEY')
         if not self.api_key:
