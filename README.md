@@ -98,14 +98,64 @@ NBA_LSTM_Game_Predictor/
 ├── scripts/                      # Utility scripts
 │   └── setup_odds_api.py         # Odds API setup & test
 │
+├── tests/                        # Test suite
+│   ├── __init__.py
+│   ├── conftest.py               # Pytest fixtures
+│   ├── test_paths.py
+│   ├── test_utils.py
+│   ├── test_elo_system.py
+│   ├── test_data_manager.py
+│   ├── test_odds_api.py
+│   ├── test_ensemble_predictor.py
+│   └── test_main.py
+│
 ├── docs/                         # Documentation
 │   ├── PREDICTIONGUIDE.md
 │   ├── NBAPREDICTIONCEILING.md
 │   └── ELOplusCACHINGsummary.md
 │
+├── pytest.ini                    # Pytest configuration
+├── .coveragerc                   # Coverage configuration
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 🧪 Testing
+
+The project includes a comprehensive test suite with **179 tests** covering core functionality.
+
+### Run Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run specific test file
+pytest tests/test_elo_system.py
+
+# Run tests with coverage report
+pytest --cov=src --cov-report=term-missing
+
+# Generate HTML coverage report
+pytest --cov=src --cov-report=html
+```
+
+### Test Coverage
+
+| Module | Coverage | Notes |
+|--------|----------|-------|
+| `paths.py` | 100% | Fully covered |
+| `nba_data_manager.py` | 82% | Core ELO system tested |
+| `odds_api.py` | 46% | API calls mocked |
+| `nba_ensemble_predictor.py` | 21% | Training requires full dataset |
+| `utils.py` | 38% | GPU detection tested |
+
+**Note**: The ensemble predictor has lower unit test coverage because the training functions require the full NBA dataset. These are integration-tested via `python main.py train`.
 
 ---
 

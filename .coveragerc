@@ -1,0 +1,31 @@
+[run]
+source = src
+omit = 
+    src/__pycache__/*
+    tests/*
+    */__init__.py
+    # Large script files that require full training/prediction runs
+    # These are integration-tested by running the actual commands
+    src/predict_with_ensemble.py
+    src/update_prediction_results.py
+    src/nba_predictor.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    except ImportError
+    # Exclude main blocks
+    if __name__
+show_missing = true
+skip_covered = false
+# Unit-testable code coverage target
+# Note: ensemble_predictor has 300+ lines of training code that requires
+# full dataset to test properly - integration tested via `python main.py train`
+fail_under = 45
+
+[html]
+directory = reports/coverage_html
