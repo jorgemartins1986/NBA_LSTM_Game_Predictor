@@ -180,19 +180,19 @@ def predict_todays_games(single_model: str = None):
             # Determine confidence tier (5-star system)
             if result.confidence >= 0.50:
                 tier = "⭐⭐⭐⭐⭐ EXCELLENT"
-                tier_short = "🔥 EXCELLENT BET"
+                tier_short = "⭐⭐⭐⭐⭐ EXCELLENT BET"
             elif result.confidence >= 0.40:
                 tier = "⭐⭐⭐⭐ STRONG"
-                tier_short = "💰 STRONG BET"
+                tier_short = "⭐⭐⭐⭐ STRONG BET"
             elif result.confidence >= 0.30:
                 tier = "⭐⭐⭐ GOOD"
-                tier_short = "⚡ GOOD BET"
+                tier_short = "⭐⭐⭐ GOOD BET"
             elif result.confidence >= 0.20:
                 tier = "⭐⭐ MODERATE"
-                tier_short = "📊 MODERATE"
+                tier_short = "⭐⭐ MODERATE"
             elif result.confidence >= 0.10:
                 tier = "⭐ RISKY"
-                tier_short = "❓ RISKY"
+                tier_short = "⭐ RISKY"
             else:
                 tier = "⛔ SKIP"
                 tier_short = "⛔ SKIP"
@@ -277,7 +277,7 @@ def predict_todays_games(single_model: str = None):
     
     if good_bets:
         for p in good_bets:
-            tier_emoji = "🔥" if p['confidence'] >= 0.50 else "💰" if p['confidence'] >= 0.40 else "⚡"
+            tier_emoji = "⭐⭐⭐⭐⭐" if p['confidence'] >= 0.50 else "⭐⭐⭐⭐" if p['confidence'] >= 0.40 else "⭐⭐⭐"
             print(f"\n{tier_emoji} {p['away_team']} @ {p['home_team']}")
             print(f"   → {p['predicted_winner']} ({p['home_win_prob']*100:.1f}% prob, {p['confidence']*100:.0f}% confidence)")
             print(f"   ✅ Model agreement: {p['model_agreement']*100:.0f}%")
