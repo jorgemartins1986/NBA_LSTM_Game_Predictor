@@ -5,12 +5,8 @@ omit =
     tests/*
     */__init__.py
     # Legacy script files (kept for backward compatibility)
-    # These delegate to the new refactored modules
-    src/predict_with_ensemble.py
     src/update_prediction_results.py
     src/nba_predictor.py
-    # Old monolithic file - replaced by src/training/ and src/prediction/ modules
-    src/nba_ensemble_predictor.py
     # GPU utilities - hardware-dependent, hard to unit test
     src/utils.py
 

@@ -342,8 +342,8 @@ Examples:
         return
     
     if args.command == 'predict':
-        from src.predict_with_ensemble import main as predict_main
-        predict_main()
+        from predict import predict_todays_games
+        predict_todays_games()
         return
     
     if args.command == 'train':

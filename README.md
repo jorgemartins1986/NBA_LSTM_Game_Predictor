@@ -69,22 +69,23 @@ NBA_LSTM_Game_Predictor/
 │   ├── utils.py                  # Shared utilities (GPU config)
 │   ├── nba_data_manager.py       # Data fetching & ELO ratings
 │   ├── nba_predictor.py          # Feature engineering
-│   ├── nba_ensemble_predictor.py # (Legacy) Ensemble training
-│   ├── predict_with_ensemble.py  # (Legacy) Prediction logic
 │   ├── update_prediction_results.py # Result tracking
 │   ├── odds_api.py               # Live betting odds integration
 │   │
-│   ├── training/                 # Refactored training module (v2.0)
+│   ├── training/                 # Modular training module
 │   │   ├── __init__.py           # Module exports
 │   │   ├── data_prep.py          # DataPreparation, TrainTestData
 │   │   ├── trainers.py           # XGBoostTrainer, RFTrainer, etc.
 │   │   ├── evaluation.py         # ModelEvaluator, metrics
 │   │   └── ensemble.py           # EnsembleTrainer coordinator
 │   │
-│   └── prediction/               # Refactored prediction module (v2.0)
+│   └── prediction/               # Modular prediction module
 │       ├── __init__.py           # Module exports
 │       ├── features.py           # FeatureComputer, GameFeatures
 │       ├── loader.py             # ModelLoader, LoadedEnsemble
+│       ├── nba_data.py           # Live NBA API data fetching
+│       ├── odds.py               # Odds integration
+│       ├── history.py            # Prediction history
 │       └── pipeline.py           # PredictionPipeline
 │
 ├── models/                       # Trained models (git-ignored)
@@ -443,7 +444,7 @@ The `--stats` command shows comprehensive breakdown:
 source venv/bin/activate       # Mac/Linux
 
 # Then run
-python predict_with_ensemble.py
+python predict.py
 ```
 
 ### Low accuracy after retraining

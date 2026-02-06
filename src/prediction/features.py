@@ -197,7 +197,6 @@ class FeatureComputer:
             home_features: Home team rolling features
             away_features: Away team rolling features
             feature_cols: List of feature column names (defines order)
-            h2h_*: Head-to-head features
             *_standings: Standings features
             *_odds: Odds features
             
@@ -233,13 +232,16 @@ class FeatureComputer:
             for key, value in away_standings.items():
                 feature_dict[f'AWAY_{key}'] = value
         
-        # Add odds features
+        # Add odds features (handle both prefixed and unprefixed keys)
         if home_odds:
             for key, value in home_odds.items():
                 if 'HOME' not in key:
                     feature_dict[f'HOME_{key}'] = value
                 else:
                     feature_dict[key] = value
+            # Also add BOOKMAKER_COUNT if present
+            if 'BOOKMAKER_COUNT' in home_odds:
+                feature_dict['BOOKMAKER_COUNT'] = home_odds['BOOKMAKER_COUNT']
         if away_odds:
             for key, value in away_odds.items():
                 if 'AWAY' not in key:
@@ -247,16 +249,23 @@ class FeatureComputer:
                 else:
                     feature_dict[key] = value
         
+        # Compute differential features from standings
+        if home_standings and away_standings:
+            feature_dict['RANK_DIFF'] = home_standings.get('CONF_RANK', 8) - away_standings.get('CONF_RANK', 8)
+            feature_dict['WIN_PCT_DIFF'] = home_standings.get('WIN_PCT', 0.5) - away_standings.get('WIN_PCT', 0.5)
+        
         # Build vector in correct order
         vector = []
         for col in feature_cols:
             if col in feature_dict:
-                vector.append(feature_dict[col])
+                val = feature_dict[col]
+                # Handle NaN values
+                vector.append(val if val is not None and not (isinstance(val, float) and np.isnan(val)) else 0.0)
             else:
                 # Use default or 0
                 vector.append(self._get_default_value(col))
         
-        return np.array(vector).reshape(1, -1)
+        return np.array(vector, dtype=np.float64).reshape(1, -1)
     
     def _get_default_value(self, col_name: str) -> float:
         """Get default value for a missing feature"""

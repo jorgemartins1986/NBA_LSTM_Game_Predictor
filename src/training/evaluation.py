@@ -249,3 +249,79 @@ class ModelEvaluator:
             'max': float(np.max(probs)),
             'median': float(np.median(probs)),
         }
+
+
+def save_classification_reports(model_reports: List[Dict], architectures: List[str]) -> str:
+    """Save classification reports to a text file for analysis.
+    
+    Args:
+        model_reports: List of dicts with 'model', 'architecture', 'accuracy', 'report'
+        architectures: List of architecture names
+        
+    Returns:
+        Path to the saved report file
+    """
+    from datetime import datetime
+    import json
+    from ..paths import get_report_path
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_file = get_report_path(f'model_reports_{timestamp}.txt')
+    
+    with open(report_file, 'w') as f:
+        f.write("="*70 + "\n")
+        f.write(f"NBA ENSEMBLE MODEL CLASSIFICATION REPORTS\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("="*70 + "\n\n")
+        
+        for report_data in model_reports:
+            f.write(f"\n{'='*70}\n")
+            f.write(f"MODEL {report_data['model']}: {report_data['architecture'].upper()}\n")
+            f.write(f"{'='*70}\n")
+            f.write(f"Accuracy: {report_data['accuracy']*100:.2f}%\n\n")
+            f.write("Classification Report:\n")
+            f.write(report_data['report'])
+            f.write("\n")
+        
+        # Summary comparison
+        f.write("\n" + "="*70 + "\n")
+        f.write("SUMMARY COMPARISON\n")
+        f.write("="*70 + "\n\n")
+        f.write(f"{'Model':<20} {'Accuracy':>10} {'Away Prec':>12} {'Home Prec':>12}\n")
+        f.write("-"*56 + "\n")
+        
+        for report_data in model_reports:
+            # Parse precision from report
+            lines = report_data['report'].split('\n')
+            away_prec = home_prec = 'N/A'
+            for line in lines:
+                if 'Away Win' in line:
+                    parts = line.split()
+                    away_prec = parts[2] if len(parts) > 2 else 'N/A'
+                if 'Home Win' in line:
+                    parts = line.split()
+                    home_prec = parts[2] if len(parts) > 2 else 'N/A'
+            
+            f.write(f"{report_data['architecture']:<20} {report_data['accuracy']*100:>9.2f}% {away_prec:>12} {home_prec:>12}\n")
+        
+        f.write("\n" + "-"*56 + "\n")
+        avg_acc = np.mean([r['accuracy'] for r in model_reports])
+        f.write(f"{'AVERAGE':<20} {avg_acc*100:>9.2f}%\n")
+    
+    # Also save as JSON for programmatic access
+    json_file = get_report_path(f'model_reports_{timestamp}.json')
+    json_data = [{
+        'model': r['model'],
+        'architecture': r['architecture'],
+        'accuracy': float(r['accuracy']),
+        'report': r['report']
+    } for r in model_reports]
+    
+    with open(json_file, 'w') as f:
+        json.dump(json_data, f, indent=2)
+    
+    print(f"\n📊 Saved classification reports to:")
+    print(f"   📄 {report_file} (human-readable)")
+    print(f"   📋 {json_file} (JSON for analysis)")
+    
+    return report_file

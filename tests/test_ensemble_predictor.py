@@ -1,7 +1,7 @@
 """
-Tests for src/nba_ensemble_predictor.py
-=======================================
-Tests for ensemble model training and prediction functions.
+Tests for ensemble training and prediction functions
+=====================================================
+Tests for classification reports and ensemble integration.
 """
 
 import pytest
@@ -19,10 +19,10 @@ class TestSaveClassificationReports:
     
     def test_creates_txt_file(self, tmp_path):
         """Should create a text file with reports"""
-        from src.nba_ensemble_predictor import save_classification_reports
+        from src.training.evaluation import save_classification_reports
         
         # Mock the get_report_path to use tmp_path
-        with patch('src.nba_ensemble_predictor.get_report_path') as mock_path:
+        with patch('src.paths.get_report_path') as mock_path:
             mock_path.side_effect = lambda x: str(tmp_path / x)
             
             reports = [
@@ -40,9 +40,9 @@ class TestSaveClassificationReports:
     
     def test_creates_json_file(self, tmp_path):
         """Should create a JSON file with reports"""
-        from src.nba_ensemble_predictor import save_classification_reports
+        from src.training.evaluation import save_classification_reports
         
-        with patch('src.nba_ensemble_predictor.get_report_path') as mock_path:
+        with patch('src.paths.get_report_path') as mock_path:
             mock_path.side_effect = lambda x: str(tmp_path / x)
             
             reports = [
@@ -62,9 +62,9 @@ class TestSaveClassificationReports:
     
     def test_report_content(self, tmp_path):
         """Report should contain model information"""
-        from src.nba_ensemble_predictor import save_classification_reports
+        from src.training.evaluation import save_classification_reports
         
-        with patch('src.nba_ensemble_predictor.get_report_path') as mock_path:
+        with patch('src.paths.get_report_path') as mock_path:
             mock_path.side_effect = lambda x: str(tmp_path / x)
             
             reports = [

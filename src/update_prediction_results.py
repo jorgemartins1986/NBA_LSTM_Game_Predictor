@@ -93,7 +93,7 @@ def update_results(date_str=None, update_all=False):
     if not os.path.exists(PREDICTION_HISTORY_FILE):
         print("❌ No prediction history file found.")
         print(f"   Expected: {PREDICTION_HISTORY_FILE}")
-        print("   Run predictions first with: python -m src.predict_with_ensemble")
+        print("   Run predictions first with: python predict.py")
         return
     
     # Load history

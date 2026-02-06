@@ -7,7 +7,6 @@ Modules:
 - training: Model training components (trainers, data prep, evaluation)
 - prediction: Prediction pipeline and feature computation
 - nba_data_manager: Data fetching and caching
-- nba_ensemble_predictor: Backward-compatible ensemble training
 - nba_predictor: Feature engineering and base models
 """
 

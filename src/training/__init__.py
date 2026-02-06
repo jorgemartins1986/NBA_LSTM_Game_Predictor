@@ -15,7 +15,7 @@ from .trainers import (
     TrainerFactory
 )
 from .ensemble import EnsembleTrainer, EnsembleResult, EnsembleConfig
-from .evaluation import ModelEvaluator, EvaluationResult
+from .evaluation import ModelEvaluator, EvaluationResult, save_classification_reports
 
 __all__ = [
     'DataPreparation',
@@ -31,4 +31,5 @@ __all__ = [
     'EnsembleConfig',
     'ModelEvaluator',
     'EvaluationResult',
+    'save_classification_reports',
 ]

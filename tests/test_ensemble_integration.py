@@ -1,6 +1,6 @@
 """
-Integration tests for src/nba_ensemble_predictor.py
-====================================================
+Integration tests for ensemble training module
+==============================================
 Tests for model training and ensemble prediction functionality.
 """
 
