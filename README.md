@@ -283,11 +283,11 @@ The prediction output includes bet-quality tiers based on model confidence:
 
 | Tier | Confidence | Probability | Recommendation |
 |------|------------|-------------|----------------|
-| 🔥 EXCELLENT | 50%+ | 75%+ | Strong edge |
-| 💰 STRONG | 40-50% | 70-75% | Good value |
-| ⚡ GOOD | 30-40% | 65-70% | Moderate edge |
-| 📊 MODERATE | 20-30% | 60-65% | Small edge |
-| ❓ RISKY | 10-20% | 55-60% | Marginal |
+| ⭐⭐⭐⭐⭐ EXCELLENT | 50%+ | 75%+ | Strong edge |
+| ⭐⭐⭐⭐ STRONG | 40-50% | 70-75% | Good value |
+| ⭐⭐⭐ GOOD | 30-40% | 65-70% | Moderate edge |
+| ⭐⭐ MODERATE | 20-30% | 60-65% | Small edge |
+| ⭐ RISKY | 10-20% | 55-60% | Marginal |
 | ⛔ SKIP | <10% | <55% | No edge |
 
 **Model Agreement** indicates how much the 4 models agree (higher = more confidence in the prediction).

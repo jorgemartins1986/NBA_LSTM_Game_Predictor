@@ -175,19 +175,19 @@ def predict_todays_games(single_model: str = None):
             winner_name = home_team['full_name'] if result.predicted_winner == 'HOME' else away_team['full_name']
             conf_pct = result.confidence * 100
             
-            # Determine confidence tier
+            # Determine confidence tier (5-star system)
             if result.confidence >= 0.50:
-                tier = "⭐⭐⭐ EXCELLENT"
+                tier = "⭐⭐⭐⭐⭐ EXCELLENT"
             elif result.confidence >= 0.40:
-                tier = "⭐⭐ STRONG"
+                tier = "⭐⭐⭐⭐ STRONG"
             elif result.confidence >= 0.30:
-                tier = "⭐ GOOD"
+                tier = "⭐⭐⭐ GOOD"
             elif result.confidence >= 0.20:
-                tier = "MODERATE"
+                tier = "⭐⭐ MODERATE"
             elif result.confidence >= 0.10:
-                tier = "RISKY"
+                tier = "⭐ RISKY"
             else:
-                tier = "SKIP"
+                tier = "⛔ SKIP"
             
             print(f"\n   📊 PREDICTION: {winner_name}")
             print(f"   Home Win Probability: {result.home_win_probability*100:.1f}%")
