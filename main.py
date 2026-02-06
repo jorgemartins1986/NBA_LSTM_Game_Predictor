@@ -347,8 +347,8 @@ Examples:
         return
     
     if args.command == 'train':
-        from train import main as train_main
-        train_main()
+        from train import train_ensemble
+        train_ensemble()
         return
     
     # No command given - show help

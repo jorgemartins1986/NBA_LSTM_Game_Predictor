@@ -261,10 +261,7 @@ class EnsembleTrainer:
             
             trainer = self.trainer_factory.create(model_type)
             
-            # Handle feature selection for RF
-            if model_type == 'random_forest' and hasattr(model, '_top_feature_indices'):
-                X_test_scaled = X_test_scaled[:, model._top_feature_indices]
-            
+            # predict_proba handles feature selection internally
             preds = trainer.predict_proba(model, X_test_scaled)
             all_preds.append(preds)
             model_names.append(model_type)

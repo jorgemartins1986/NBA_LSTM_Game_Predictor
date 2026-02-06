@@ -5,22 +5,24 @@ Train the NBA Ensemble Model
 Entry point script for training all ensemble models.
 
 Usage:
-    python train.py
+    python train.py              # Train full ensemble
+    python train.py --help       # Show help
 """
 
 import sys
 import os
+import argparse
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.nba_data_manager import NBADataFetcher
-from src.nba_predictor import NBAPredictor
-from src.training import EnsembleTrainer, EnsembleConfig
 
-
-def main():
+def train_ensemble():
     """Main ensemble training using refactored modules"""
+    from src.nba_data_manager import NBADataFetcher
+    from src.nba_predictor import NBAPredictor
+    from src.training import EnsembleTrainer, EnsembleConfig
+    
     print("="*70)
     print("NBA ENSEMBLE PREDICTOR")
     print("Training multiple models for improved accuracy")
@@ -73,6 +75,35 @@ def main():
     print("  python main.py predict")
     
     return result
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Train the NBA Ensemble Model',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python train.py                Train all ensemble models (XGBoost, RF, Logistic, LSTM)
+  
+Models trained:
+  - XGBoost: Gradient boosted trees with optimized hyperparameters
+  - Random Forest: Bagged decision trees with OOB validation
+  - Logistic Regression: Linear baseline, well-calibrated probabilities
+  - LSTM: Attention-enhanced neural network
+
+Training will:
+  1. Fetch latest NBA data from API
+  2. Engineer 112+ features including fatigue and H2H
+  3. Train all 4 models with chronological split
+  4. Build stacking meta-model
+  5. Save models to models/ directory
+        """
+    )
+    
+    args = parser.parse_args()
+    
+    # If we get here (no --help), run training
+    train_ensemble()
 
 
 if __name__ == "__main__":

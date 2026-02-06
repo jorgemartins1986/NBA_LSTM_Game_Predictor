@@ -247,7 +247,7 @@ class TestLSTMTrainer:
     def test_model_type_property(self):
         """Test model type is correct"""
         trainer = LSTMTrainer()
-        assert trainer.model_type == 'keras'
+        assert trainer.model_type == 'lstm'
     
     def test_init_with_model_builder(self):
         """Test initialization with custom model builder"""

@@ -115,7 +115,7 @@ def mock_ensemble():
         models=[model1, model2, model3],
         scalers=[scaler1, scaler2, scaler3],
         feature_cols=['feat1', 'feat2', 'feat3', 'feat4', 'feat5'],
-        model_types=['xgboost', 'logistic', 'keras']
+        model_types=['xgboost', 'logistic', 'lstm']
     )
 
 

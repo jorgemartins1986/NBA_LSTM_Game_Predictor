@@ -28,7 +28,7 @@ class TestLoadedEnsemble:
             models=models,
             scalers=scalers,
             feature_cols=['feat1', 'feat2'],
-            model_types=['xgboost', 'keras']
+            model_types=['xgboost', 'lstm']
         )
         
         assert ensemble.n_models == 2
@@ -43,14 +43,14 @@ class TestLoadedEnsemble:
             models=models,
             scalers=scalers,
             feature_cols=[],
-            model_types=['xgboost', 'keras']
+            model_types=['xgboost', 'lstm']
         )
         
         model, scaler, mtype = ensemble.get_model(1)
         
         assert model is models[1]
         assert scaler is scalers[1]
-        assert mtype == 'keras'
+        assert mtype == 'lstm'
     
     def test_optional_fields(self):
         """Test optional stacking fields"""
@@ -156,7 +156,7 @@ class TestModelLoader:
     def test_load_ensemble_handles_missing_models(self, loader):
         """Test that load_ensemble handles missing models gracefully"""
         # Setup mocks
-        with patch.object(loader, 'load_model_types', return_value=['xgboost', 'keras']):
+        with patch.object(loader, 'load_model_types', return_value=['xgboost', 'lstm']):
             with patch.object(loader, '_load_xgboost_model', return_value=Mock()):
                 with patch.object(loader, '_load_keras_model', side_effect=Exception("Model not found")):
                     with patch.object(loader, 'load_scalers', return_value=[Mock(), Mock()]):

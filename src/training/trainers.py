@@ -369,7 +369,7 @@ class LSTMTrainer(ModelTrainer):
     
     @property
     def model_type(self) -> str:
-        return 'keras'
+        return 'lstm'
     
     @property
     def model_builder(self):
