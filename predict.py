@@ -174,33 +174,77 @@ def predict_todays_games(single_model: str = None):
             # Display results
             winner_name = home_team['full_name'] if result.predicted_winner == 'HOME' else away_team['full_name']
             conf_pct = result.confidence * 100
+            home_prob = result.home_win_probability * 100
+            away_prob = (1 - result.home_win_probability) * 100
             
             # Determine confidence tier (5-star system)
             if result.confidence >= 0.50:
                 tier = "⭐⭐⭐⭐⭐ EXCELLENT"
+                tier_short = "🔥 EXCELLENT BET"
             elif result.confidence >= 0.40:
                 tier = "⭐⭐⭐⭐ STRONG"
+                tier_short = "💰 STRONG BET"
             elif result.confidence >= 0.30:
                 tier = "⭐⭐⭐ GOOD"
+                tier_short = "⚡ GOOD BET"
             elif result.confidence >= 0.20:
                 tier = "⭐⭐ MODERATE"
+                tier_short = "📊 MODERATE"
             elif result.confidence >= 0.10:
                 tier = "⭐ RISKY"
+                tier_short = "❓ RISKY"
             else:
                 tier = "⛔ SKIP"
+                tier_short = "⛔ SKIP"
             
-            print(f"\n   📊 PREDICTION: {winner_name}")
-            print(f"   Home Win Probability: {result.home_win_probability*100:.1f}%")
-            print(f"   Confidence: {conf_pct:.1f}% ({tier})")
-            print(f"   Model Agreement: {result.model_agreement*100:.1f}%")
+            # Main prediction
+            print(f"\n   🏆 Predicted Winner: {winner_name}")
+            print(f"   📊 Confidence: {conf_pct:.1f}% ({tier})")
+            print(f"   🏠 Home Win Prob: {home_prob:.1f}%")
+            print(f"   ✈️  Away Win Prob: {away_prob:.1f}%")
             
-            # Show individual model predictions
-            print(f"   Individual: {[f'{p:.2f}' for p in result.individual_predictions]}")
+            # Show odds and value if available
+            if game_odds:
+                home_odds_val = game_odds.get('HOME_AVG_ODDS', 0)
+                away_odds_val = game_odds.get('AWAY_AVG_ODDS', 0)
+                if home_odds_val and away_odds_val and home_odds_val > 1 and away_odds_val > 1:
+                    market_home = game_odds.get('HOME_IMPLIED_PROB', 0) * 100
+                    market_away = game_odds.get('AWAY_IMPLIED_PROB', 0) * 100
+                    print(f"   💰 Bookmaker Odds: Home {home_odds_val:.2f} ({market_home:.0f}%) | Away {away_odds_val:.2f} ({market_away:.0f}%)")
+                    # Value calculation
+                    value_diff = home_prob - market_home
+                    if abs(value_diff) > 0.1:
+                        print(f"   🔥 Value: Model {home_prob:.1f}% vs Market {market_home:.1f}% ({value_diff:+.1f}%)")
             
-            # Show odds if available
-            odds_display = format_odds_display(game_odds)
-            if odds_display:
-                print(odds_display)
+            # Rest days
+            home_rest = home_features.get('DAYS_REST', 'N/A')
+            away_rest = away_features.get('DAYS_REST', 'N/A')
+            if home_rest != 'N/A':
+                home_rest = f"{home_rest:.0f}"
+            if away_rest != 'N/A':
+                away_rest = f"{away_rest:.0f}"
+            print(f"\n   😴 Rest: Home {home_rest}d | Away {away_rest}d")
+            
+            # H2H
+            h2h_games = h2h_home.get('H2H_GAMES', 0)
+            h2h_win_pct = h2h_home.get('H2H_WIN_RATE', 0.5) * 100
+            print(f"   🆚 H2H: Home {h2h_win_pct:.0f}% ({h2h_games} games)")
+            
+            # Standings
+            home_rank = home_standings.get('CONF_RANK', '?')
+            home_wins = home_standings.get('WINS', 0)
+            home_losses = home_standings.get('LOSSES', 0)
+            away_rank = away_standings.get('CONF_RANK', '?')
+            away_wins = away_standings.get('WINS', 0)
+            away_losses = away_standings.get('LOSSES', 0)
+            print(f"   📈 Standings: Home #{home_rank} ({home_wins}-{home_losses}) | Away #{away_rank} ({away_wins}-{away_losses})")
+            
+            # Individual model predictions with names
+            model_names = ['XGBoost', 'RF', 'Logistic', 'LSTM']
+            print(f"\n   🤖 Model Agreement: {result.model_agreement*100:.1f}%")
+            for j, pred in enumerate(result.individual_predictions):
+                name = model_names[j] if j < len(model_names) else f"Model{j+1}"
+                print(f"      {name:10s} {pred*100:5.1f}%")
             
             predictions.append({
                 'away_team': away_team['full_name'],
@@ -209,6 +253,7 @@ def predict_todays_games(single_model: str = None):
                 'confidence': result.confidence,
                 'home_win_prob': result.home_win_probability,
                 'model_agreement': result.model_agreement,
+                'tier_short': tier_short,
             })
             
         except Exception as e:
@@ -219,17 +264,31 @@ def predict_todays_games(single_model: str = None):
     if predictions and not (all_finished and game_date != eastern_today):
         save_predictions_to_history(predictions, game_date)
     
-    # Summary
+    # Summary - show GOOD and above bets
     print("\n" + "="*70)
-    print("SUMMARY")
+    print("SUMMARY - ENSEMBLE PREDICTIONS")
     print("="*70)
-    print(f"   Games predicted: {len(predictions)}/{len(todays_games)}")
     
-    high_conf = [p for p in predictions if p['confidence'] >= 0.30]
-    if high_conf:
-        print(f"   High confidence picks ({len(high_conf)}):")
-        for p in high_conf:
-            print(f"      {p['predicted_winner']} ({p['confidence']*100:.0f}%)")
+    # Sort by confidence (highest first)
+    sorted_preds = sorted(predictions, key=lambda x: x['confidence'], reverse=True)
+    
+    # Show only GOOD and above (confidence >= 30%)
+    good_bets = [p for p in sorted_preds if p['confidence'] >= 0.30]
+    
+    if good_bets:
+        for p in good_bets:
+            tier_emoji = "🔥" if p['confidence'] >= 0.50 else "💰" if p['confidence'] >= 0.40 else "⚡"
+            print(f"\n{tier_emoji} {p['away_team']} @ {p['home_team']}")
+            print(f"   → {p['predicted_winner']} ({p['home_win_prob']*100:.1f}% prob, {p['confidence']*100:.0f}% confidence)")
+            print(f"   ✅ Model agreement: {p['model_agreement']*100:.0f}%")
+            print(f"   📋 {p['tier_short']}")
+    else:
+        print("\n   No high-confidence picks today (GOOD or better).")
+    
+    # Summary stats
+    print(f"\n" + "-"*70)
+    print(f"   Total games: {len(predictions)}/{len(todays_games)}")
+    print(f"   Recommended bets: {len(good_bets)} (⭐⭐⭐ GOOD or better)")
 
 
 def main():
