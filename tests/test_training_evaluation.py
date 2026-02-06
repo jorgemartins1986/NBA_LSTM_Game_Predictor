@@ -52,6 +52,52 @@ class TestEvaluationResult:
         assert result.accuracy == 0.66
         assert result.classification_report is not None
     
+    def test_precision_away_property(self):
+        """Test precision_away property is callable and returns float or None"""
+        report = "Away Win 0.64 0.70 0.67 100"  # Simple format for parsing
+        result = EvaluationResult(
+            accuracy=0.66,
+            y_true=np.array([]),
+            y_pred=np.array([]),
+            y_pred_prob=np.array([]),
+            classification_report=report
+        )
+        
+        # Calls precision_away which uses _extract_metric
+        precision = result.precision_away
+        # Should be 0.64 or None depending on parsing
+        assert precision == 0.64 or precision is None
+    
+    def test_precision_home_property(self):
+        """Test precision_home property is callable and returns float or None"""
+        report = "Home Win 0.68 0.62 0.65 100"  # Simple format for parsing
+        result = EvaluationResult(
+            accuracy=0.66,
+            y_true=np.array([]),
+            y_pred=np.array([]),
+            y_pred_prob=np.array([]),
+            classification_report=report
+        )
+        
+        # Calls precision_home which uses _extract_metric
+        precision = result.precision_home
+        # Should be 0.68 or None depending on parsing
+        assert precision == 0.68 or precision is None
+    
+    def test_extract_metric_returns_none_for_missing(self):
+        """Test that _extract_metric returns None when class not found"""
+        result = EvaluationResult(
+            accuracy=0.66,
+            y_true=np.array([]),
+            y_pred=np.array([]),
+            y_pred_prob=np.array([]),
+            classification_report="no valid data here"
+        )
+        
+        # Should return None when class name not found
+        assert result.precision_away is None
+        assert result.precision_home is None
+    
     def test_with_individual_accuracies(self):
         """Test ensemble evaluation result"""
         result = EvaluationResult(

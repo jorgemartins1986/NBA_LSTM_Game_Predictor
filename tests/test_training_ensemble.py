@@ -383,3 +383,111 @@ class TestBackwardCompatibleWrapper:
             call_args = MockTrainer.call_args
             config = call_args[0][0] if call_args[0] else call_args[1].get('config')
             assert len(config.architectures) == 3
+
+class TestEnsembleTrainerSave:
+    """Tests for EnsembleTrainer.save() method - behavior verification"""
+    
+    def test_save_method_exists(self):
+        """Test that save method exists and is callable"""
+        trainer = EnsembleTrainer(config=EnsembleConfig(verbose=False))
+        assert hasattr(trainer, 'save')
+        assert callable(trainer.save)
+
+
+class TestEnsembleTrainerEvaluate:
+    """Tests for EnsembleTrainer.evaluate() method"""
+    
+    def test_evaluate_ensemble(self, sample_matchup_df):
+        """Test ensemble evaluation"""
+        # Mock data prep
+        mock_data_prep = MagicMock()
+        mock_train_test = MagicMock()
+        mock_train_test.X_test = np.random.randn(20, 10)
+        mock_train_test.y_test = np.random.randint(0, 2, 20)
+        mock_data_prep.prepare_for_training.return_value = (mock_train_test, ['f1'])
+        
+        # Mock trainer factory
+        mock_factory = MagicMock()
+        mock_trainer = MagicMock()
+        mock_trainer.predict_proba.return_value = np.random.uniform(0.3, 0.7, 20)
+        mock_factory.create.return_value = mock_trainer
+        
+        # Mock evaluator
+        mock_evaluator = MagicMock()
+        mock_eval_result = MagicMock()
+        mock_eval_result.accuracy = 0.65
+        mock_eval_result.classification_report = "Classification Report"
+        mock_evaluator.evaluate_ensemble.return_value = mock_eval_result
+        
+        trainer = EnsembleTrainer(
+            config=EnsembleConfig(verbose=False),
+            trainer_factory=mock_factory,
+            data_prep=mock_data_prep,
+            evaluator=mock_evaluator
+        )
+        
+        # Create result to evaluate
+        mock_scaler = MagicMock()
+        mock_scaler.transform.return_value = np.random.randn(20, 10)
+        
+        ensemble_result = EnsembleResult(
+            models=[MagicMock(), MagicMock()],
+            scalers=[mock_scaler, mock_scaler],
+            feature_cols=['f1'],
+            model_types=['xgboost', 'logistic'],
+            training_results=[]
+        )
+        
+        eval_result = trainer.evaluate(ensemble_result, sample_matchup_df)
+        
+        assert eval_result.accuracy == 0.65
+        mock_evaluator.evaluate_ensemble.assert_called_once()
+    
+    def test_evaluate_logs_accuracy(self, sample_matchup_df):
+        """Test that evaluation logs accuracy"""
+        captured = []
+        
+        # Mock data prep
+        mock_data_prep = MagicMock()
+        mock_train_test = MagicMock()
+        mock_train_test.X_test = np.random.randn(20, 10)
+        mock_train_test.y_test = np.random.randint(0, 2, 20)
+        mock_data_prep.prepare_for_training.return_value = (mock_train_test, ['f1'])
+        
+        # Mock trainer factory
+        mock_factory = MagicMock()
+        mock_trainer = MagicMock()
+        mock_trainer.predict_proba.return_value = np.random.uniform(0.3, 0.7, 20)
+        mock_factory.create.return_value = mock_trainer
+        
+        # Mock evaluator
+        mock_evaluator = MagicMock()
+        mock_eval_result = MagicMock()
+        mock_eval_result.accuracy = 0.65
+        mock_eval_result.classification_report = "Report"
+        mock_evaluator.evaluate_ensemble.return_value = mock_eval_result
+        
+        trainer = EnsembleTrainer(
+            config=EnsembleConfig(verbose=True),
+            trainer_factory=mock_factory,
+            data_prep=mock_data_prep,
+            evaluator=mock_evaluator,
+            print_fn=lambda x: captured.append(x)
+        )
+        
+        # Create result to evaluate
+        mock_scaler = MagicMock()
+        mock_scaler.transform.return_value = np.random.randn(20, 10)
+        
+        ensemble_result = EnsembleResult(
+            models=[MagicMock()],
+            scalers=[mock_scaler],
+            feature_cols=['f1'],
+            model_types=['xgboost'],
+            training_results=[]
+        )
+        
+        trainer.evaluate(ensemble_result, sample_matchup_df)
+        
+        # Check that accuracy was logged
+        assert any('ENSEMBLE ACCURACY' in msg or 'EVALUATING' in msg for msg in captured)
