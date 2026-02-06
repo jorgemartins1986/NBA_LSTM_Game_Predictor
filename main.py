@@ -347,7 +347,7 @@ Examples:
         return
     
     if args.command == 'train':
-        from src.nba_ensemble_predictor import main as train_main
+        from train import main as train_main
         train_main()
         return
     

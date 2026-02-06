@@ -280,6 +280,55 @@ class EnsembleTrainer:
         self._log(eval_result.classification_report)
         
         return eval_result
+    
+    def save(self, result: EnsembleResult):
+        """
+        Save the trained ensemble to disk.
+        
+        Args:
+            result: EnsembleResult from training
+        """
+        from ..paths import (
+            get_model_path, ENSEMBLE_SCALERS_FILE, 
+            ENSEMBLE_FEATURES_FILE, ENSEMBLE_TYPES_FILE
+        )
+        
+        self._log("\n💾 Saving ensemble...")
+        
+        for i, (model, model_type) in enumerate(zip(result.models, result.model_types)):
+            if model_type == 'logistic':
+                with open(get_model_path(f'nba_ensemble_logistic_{i+1}.pkl'), 'wb') as f:
+                    pickle.dump(model, f)
+                self._log(f"✓ Saved Logistic Regression model {i+1}")
+            elif model_type == 'xgboost':
+                try:
+                    booster = model.get_booster()
+                    booster.save_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
+                    self._log(f"✓ Saved XGBoost Booster model {i+1}")
+                except Exception:
+                    try:
+                        model.save_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
+                        self._log(f"✓ Saved XGBoost model {i+1}")
+                    except Exception as e:
+                        self._log(f"❌ Failed to save XGBoost model {i+1}: {e}")
+            elif model_type == 'random_forest':
+                with open(get_model_path(f'nba_ensemble_rf_{i+1}.pkl'), 'wb') as f:
+                    pickle.dump(model, f)
+                self._log(f"✓ Saved Random Forest model {i+1}")
+            else:  # keras
+                model.save(get_model_path(f'nba_ensemble_model_{i+1}.keras'))
+                self._log(f"✓ Saved Keras model {i+1}")
+        
+        with open(ENSEMBLE_SCALERS_FILE, 'wb') as f:
+            pickle.dump(result.scalers, f)
+        
+        with open(ENSEMBLE_FEATURES_FILE, 'wb') as f:
+            pickle.dump(result.feature_cols, f)
+        
+        with open(ENSEMBLE_TYPES_FILE, 'wb') as f:
+            pickle.dump(result.model_types, f)
+        
+        self._log("✓ Ensemble saved successfully")
 
 
 def train_ensemble_models(matchup_df: pd.DataFrame,

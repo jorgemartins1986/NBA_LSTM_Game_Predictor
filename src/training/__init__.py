@@ -14,7 +14,7 @@ from .trainers import (
     LSTMTrainer,
     TrainerFactory
 )
-from .ensemble import EnsembleTrainer, EnsembleResult
+from .ensemble import EnsembleTrainer, EnsembleResult, EnsembleConfig
 from .evaluation import ModelEvaluator, EvaluationResult
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     'TrainerFactory',
     'EnsembleTrainer',
     'EnsembleResult',
+    'EnsembleConfig',
     'ModelEvaluator',
     'EvaluationResult',
 ]
