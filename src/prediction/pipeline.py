@@ -130,10 +130,12 @@ class PredictionPipeline:
         Returns:
             Aggregated probability
         """
-        if weights is None:
+        if weights is None or len(weights) != len(predictions):
+            # Fall back to simple average if weights are missing or mismatched
             return float(np.mean(predictions))
         else:
             weights = np.array(weights)
+            predictions = np.array(predictions)
             weights = weights / weights.sum()  # Normalize
             return float(np.average(predictions, weights=weights))
     
