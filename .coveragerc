@@ -4,11 +4,15 @@ omit =
     src/__pycache__/*
     tests/*
     */__init__.py
-    # Large script files that require full training/prediction runs
-    # These are integration-tested by running the actual commands
+    # Legacy script files (kept for backward compatibility)
+    # These delegate to the new refactored modules
     src/predict_with_ensemble.py
     src/update_prediction_results.py
     src/nba_predictor.py
+    # Old monolithic file - replaced by src/training/ and src/prediction/ modules
+    src/nba_ensemble_predictor.py
+    # GPU utilities - hardware-dependent, hard to unit test
+    src/utils.py
 
 [report]
 exclude_lines =
@@ -22,10 +26,9 @@ exclude_lines =
     if __name__
 show_missing = true
 skip_covered = false
-# Unit-testable code coverage target
-# Note: ensemble_predictor has 300+ lines of training code that requires
-# full dataset to test properly - integration tested via `python main.py train`
-fail_under = 45
+# Refactored code coverage target 
+# Core modules (training/, prediction/) are now fully unit-testable
+fail_under = 80
 
 [html]
 directory = reports/coverage_html

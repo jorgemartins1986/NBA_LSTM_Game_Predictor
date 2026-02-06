@@ -69,10 +69,23 @@ NBA_LSTM_Game_Predictor/
 │   ├── utils.py                  # Shared utilities (GPU config)
 │   ├── nba_data_manager.py       # Data fetching & ELO ratings
 │   ├── nba_predictor.py          # Feature engineering
-│   ├── nba_ensemble_predictor.py # Ensemble training
-│   ├── predict_with_ensemble.py  # Prediction logic
+│   ├── nba_ensemble_predictor.py # (Legacy) Ensemble training
+│   ├── predict_with_ensemble.py  # (Legacy) Prediction logic
 │   ├── update_prediction_results.py # Result tracking
-│   └── odds_api.py               # Live betting odds integration
+│   ├── odds_api.py               # Live betting odds integration
+│   │
+│   ├── training/                 # Refactored training module (v2.0)
+│   │   ├── __init__.py           # Module exports
+│   │   ├── data_prep.py          # DataPreparation, TrainTestData
+│   │   ├── trainers.py           # XGBoostTrainer, RFTrainer, etc.
+│   │   ├── evaluation.py         # ModelEvaluator, metrics
+│   │   └── ensemble.py           # EnsembleTrainer coordinator
+│   │
+│   └── prediction/               # Refactored prediction module (v2.0)
+│       ├── __init__.py           # Module exports
+│       ├── features.py           # FeatureComputer, GameFeatures
+│       ├── loader.py             # ModelLoader, LoadedEnsemble
+│       └── pipeline.py           # PredictionPipeline
 │
 ├── models/                       # Trained models (git-ignored)
 │   ├── nba_ensemble_xgboost_1.json
@@ -98,16 +111,26 @@ NBA_LSTM_Game_Predictor/
 ├── scripts/                      # Utility scripts
 │   └── setup_odds_api.py         # Odds API setup & test
 │
-├── tests/                        # Test suite
+├── tests/                        # Test suite (330 tests)
 │   ├── __init__.py
 │   ├── conftest.py               # Pytest fixtures
 │   ├── test_paths.py
 │   ├── test_utils.py
 │   ├── test_elo_system.py
 │   ├── test_data_manager.py
+│   ├── test_data_manager_integration.py
 │   ├── test_odds_api.py
+│   ├── test_odds_api_integration.py
 │   ├── test_ensemble_predictor.py
-│   └── test_main.py
+│   ├── test_ensemble_integration.py
+│   ├── test_main.py
+│   ├── test_training_data_prep.py    # DataPreparation tests
+│   ├── test_training_trainers.py     # Trainer tests
+│   ├── test_training_evaluation.py   # Evaluator tests
+│   ├── test_training_ensemble.py     # EnsembleTrainer tests
+│   ├── test_prediction_features.py   # FeatureComputer tests
+│   ├── test_prediction_loader.py     # ModelLoader tests
+│   └── test_prediction_pipeline.py   # Pipeline tests
 │
 ├── docs/                         # Documentation
 │   ├── PREDICTIONGUIDE.md
@@ -124,7 +147,7 @@ NBA_LSTM_Game_Predictor/
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **179 tests** covering core functionality.
+The project includes a comprehensive test suite with **330 tests** covering core functionality at **81% coverage**.
 
 ### Run Tests
 
@@ -143,6 +166,7 @@ pytest --cov=src --cov-report=term-missing
 
 # Generate HTML coverage report
 pytest --cov=src --cov-report=html
+# View at: reports/coverage_html/index.html
 ```
 
 ### Test Coverage
@@ -150,12 +174,38 @@ pytest --cov=src --cov-report=html
 | Module | Coverage | Notes |
 |--------|----------|-------|
 | `paths.py` | 100% | Fully covered |
-| `nba_data_manager.py` | 82% | Core ELO system tested |
-| `odds_api.py` | 46% | API calls mocked |
-| `nba_ensemble_predictor.py` | 21% | Training requires full dataset |
-| `utils.py` | 38% | GPU detection tested |
+| `training/data_prep.py` | 100% | Data preparation |
+| `prediction/pipeline.py` | 100% | Prediction pipeline |
+| `prediction/features.py` | 88% | Feature computation |
+| `training/ensemble.py` | 85% | Ensemble coordinator |
+| `prediction/loader.py` | 85% | Model loading |
+| `training/evaluation.py` | 84% | Model evaluation |
+| `training/trainers.py` | 84% | Model trainers |
+| `nba_data_manager.py` | 82% | Core ELO system |
+| `odds_api.py` | 46% | External API (mocked) |
 
-**Note**: The ensemble predictor has lower unit test coverage because the training functions require the full NBA dataset. These are integration-tested via `python main.py train`.
+**Total Coverage: 81%** (target: 80%)
+
+### Architecture (v2.0)
+
+The codebase uses **dependency injection** and **factory patterns** for testability:
+
+```python
+# Example: Training with injectable dependencies
+from src.training import EnsembleTrainer, EnsembleConfig
+
+config = EnsembleConfig(architectures=['xgboost', 'logistic'])
+trainer = EnsembleTrainer(config=config)
+result = trainer.train(matchup_df)
+
+# Example: Prediction with injectable loader
+from src.prediction import PredictionPipeline, ModelLoader
+
+loader = ModelLoader()
+ensemble = loader.load_ensemble()
+pipeline = PredictionPipeline(ensemble)
+result = pipeline.predict(game_features)
+```
 
 ---
 
