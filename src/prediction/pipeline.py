@@ -141,21 +141,15 @@ class PredictionPipeline:
     
     def compute_model_agreement(self, predictions: List[float]) -> float:
         """
-        Compute how much the models agree.
+        Compute how much the models agree based on standard deviation.
+        
+        Lower std = models predicting similar probabilities = higher agreement.
         
         Returns:
-            Agreement score (0 to 1, where 1 = all models predict same direction)
+            Agreement score (0 to 1, where 1 = all models predict exact same probability)
         """
-        # Convert to binary predictions
-        binary = [(p > 0.5) for p in predictions]
-        
-        # Count votes for home
-        home_votes = sum(binary)
-        total = len(binary)
-        
-        # Agreement is how close to unanimous
-        vote_fraction = home_votes / total
-        return 2 * abs(vote_fraction - 0.5)  # 0 if 50/50, 1 if unanimous
+        # Agreement = 1 - std (higher when models predict similar probabilities)
+        return float(1 - np.std(predictions))
     
     def apply_stacking(self, 
                       predictions: List[float],

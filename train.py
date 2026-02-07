@@ -54,6 +54,9 @@ def train_ensemble():
     # Evaluate
     trainer.evaluate(result, matchup_df)
     
+    # Train stacking meta-model
+    result = trainer.train_stacking(result, matchup_df)
+    
     # Save
     trainer.save(result)
     
@@ -95,7 +98,7 @@ Training will:
   1. Fetch latest NBA data from API
   2. Engineer 112+ features including fatigue and H2H
   3. Train all 4 models with chronological split
-  4. Build stacking meta-model
+  4. Build stacking meta-model and Platt calibrator
   5. Save models to models/ directory
         """
     )

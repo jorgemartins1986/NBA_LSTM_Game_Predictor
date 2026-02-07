@@ -218,7 +218,7 @@ class TestModelEvaluator:
         assert ece > 0.3
     
     def test_compute_model_agreement_unanimous(self, evaluator):
-        """Test agreement when all models agree"""
+        """Test agreement when all models predict similar probabilities"""
         preds = [
             np.array([0.7, 0.8, 0.2]),
             np.array([0.6, 0.9, 0.3]),
@@ -227,20 +227,20 @@ class TestModelEvaluator:
         
         agreement = evaluator.compute_model_agreement(preds)
         
-        # All agree on all predictions
-        assert all(agreement == 1.0)
+        # Similar predictions = high agreement (≈0.959)
+        assert all(agreement > 0.95)
     
     def test_compute_model_agreement_split(self, evaluator):
         """Test agreement when models disagree"""
         preds = [
-            np.array([0.7, 0.3]),  # HOME, AWAY
-            np.array([0.3, 0.7])   # AWAY, HOME
+            np.array([0.7, 0.3]),  # Different predictions
+            np.array([0.3, 0.7])   # Opposite predictions
         ]
         
         agreement = evaluator.compute_model_agreement(preds)
         
-        # 50/50 split = 0 agreement
-        assert all(agreement == 0.0)
+        # std = 0.2, so agreement = 0.8
+        assert all(np.abs(agreement - 0.8) < 0.01)
     
     def test_evaluate_ensemble(self, evaluator):
         """Test full ensemble evaluation"""

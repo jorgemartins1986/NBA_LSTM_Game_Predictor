@@ -205,24 +205,24 @@ class TestPredictionPipeline:
         assert abs(result - 0.82) < 0.001
     
     def test_compute_model_agreement_unanimous(self, mock_ensemble):
-        """Test agreement when all models agree"""
+        """Test agreement when all models predict similar probabilities"""
         pipeline = PredictionPipeline(mock_ensemble)
         
-        preds = [0.7, 0.8, 0.65]  # All predict HOME
+        preds = [0.7, 0.8, 0.65]  # Similar predictions
         agreement = pipeline.compute_model_agreement(preds)
         
-        assert agreement == 1.0
+        # std ≈ 0.0624, so agreement ≈ 0.9376
+        assert abs(agreement - 0.9376) < 0.01
     
     def test_compute_model_agreement_split(self, mock_ensemble):
-        """Test agreement when models split"""
+        """Test agreement when models predict different probabilities"""
         pipeline = PredictionPipeline(mock_ensemble)
         
-        # For 3 models, can't be exactly 50/50
-        preds = [0.7, 0.3, 0.6]  # 2 HOME, 1 AWAY
+        preds = [0.7, 0.3, 0.6]  # More varied predictions
         agreement = pipeline.compute_model_agreement(preds)
         
-        # 2/3 vote for HOME = 0.667, |0.667 - 0.5| * 2 = 0.333
-        assert abs(agreement - 0.333) < 0.01
+        # std ≈ 0.17, so agreement ≈ 0.83
+        assert abs(agreement - 0.83) < 0.01
     
     def test_predict_from_features(self, mock_ensemble):
         """Test prediction from feature vector"""

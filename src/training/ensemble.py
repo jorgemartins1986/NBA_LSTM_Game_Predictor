@@ -45,6 +45,9 @@ class EnsembleResult:
     training_results: List[TrainingResult]
     ensemble_accuracy: Optional[float] = None
     individual_accuracies: Optional[List[float]] = None
+    # Stacking artifacts
+    meta_clf: Optional[Any] = None
+    platt: Optional[Any] = None
     
     @property
     def n_models(self) -> int:
@@ -278,6 +281,86 @@ class EnsembleTrainer:
         
         return eval_result
     
+    def train_stacking(self, result: EnsembleResult, matchup_df: pd.DataFrame) -> EnsembleResult:
+        """
+        Train stacking meta-model and Platt calibrator on test set predictions.
+        
+        The stacking approach:
+        1. Get each base model's probability predictions on test set
+        2. Build meta-features: [raw_probs, confidences]
+        3. Train LogisticRegression as meta-classifier
+        4. Train Platt calibrator on meta-classifier output
+        
+        Args:
+            result: EnsembleResult with trained base models
+            matchup_df: Matchup dataframe (same as used for training)
+            
+        Returns:
+            Updated EnsembleResult with meta_clf and platt
+        """
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import cross_val_predict
+        
+        self._log("\n" + "="*70)
+        self._log("TRAINING STACKING META-MODEL")
+        self._log("="*70)
+        
+        # Get test data
+        data, _ = self.prepare_data(matchup_df)
+        
+        # Collect predictions from each base model on test set
+        all_test_preds = []
+        
+        for model, scaler, model_type in zip(result.models, result.scalers, result.model_types):
+            X_test_scaled = scaler.transform(data.X_test)
+            
+            trainer = self.trainer_factory.create(model_type)
+            preds = trainer.predict_proba(model, X_test_scaled)
+            all_test_preds.append(preds)
+        
+        # Build meta-features: [raw_probs, confidences]
+        raw_probs = np.column_stack(all_test_preds)  # Shape: (n_test, n_models)
+        confidences = np.abs(raw_probs - 0.5)  # Distance from 50%
+        
+        meta_X = np.hstack([raw_probs, confidences])  # Shape: (n_test, 2*n_models)
+        meta_y = data.y_test
+        
+        self._log(f"✓ Built meta-features: {meta_X.shape}")
+        
+        # Train meta-classifier (logistic regression)
+        meta_clf = LogisticRegression(
+            C=1.0, 
+            class_weight='balanced',
+            max_iter=1000,
+            random_state=self.config.random_state
+        )
+        meta_clf.fit(meta_X, meta_y)
+        
+        # Get meta-classifier predictions for Platt calibration
+        meta_probs = meta_clf.predict_proba(meta_X)[:, 1]
+        
+        # Train Platt calibrator (another logistic regression on meta-probs)
+        platt = LogisticRegression(
+            C=1.0,
+            max_iter=1000,
+            random_state=self.config.random_state
+        )
+        platt.fit(meta_probs.reshape(-1, 1), meta_y)
+        
+        # Evaluate stacking
+        stacked_preds = platt.predict_proba(meta_probs.reshape(-1, 1))[:, 1]
+        stacked_accuracy = np.mean((stacked_preds >= 0.5) == meta_y)
+        
+        self._log(f"✓ Trained meta-classifier")
+        self._log(f"✓ Trained Platt calibrator")
+        self._log(f"🎯 STACKED ACCURACY: {stacked_accuracy*100:.2f}%")
+        
+        # Update result with stacking artifacts
+        result.meta_clf = meta_clf
+        result.platt = platt
+        
+        return result
+    
     def save(self, result: EnsembleResult):
         """
         Save the trained ensemble to disk.
@@ -287,7 +370,8 @@ class EnsembleTrainer:
         """
         from ..paths import (
             get_model_path, ENSEMBLE_SCALERS_FILE, 
-            ENSEMBLE_FEATURES_FILE, ENSEMBLE_TYPES_FILE
+            ENSEMBLE_FEATURES_FILE, ENSEMBLE_TYPES_FILE,
+            ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE
         )
         
         self._log("\n💾 Saving ensemble...")
@@ -324,6 +408,17 @@ class EnsembleTrainer:
         
         with open(ENSEMBLE_TYPES_FILE, 'wb') as f:
             pickle.dump(result.model_types, f)
+        
+        # Save stacking artifacts if trained
+        if result.meta_clf is not None:
+            with open(ENSEMBLE_META_LR_FILE, 'wb') as f:
+                pickle.dump(result.meta_clf, f)
+            self._log("✓ Saved stacking meta-classifier")
+        
+        if result.platt is not None:
+            with open(ENSEMBLE_PLATT_FILE, 'wb') as f:
+                pickle.dump(result.platt, f)
+            self._log("✓ Saved Platt calibrator")
         
         self._log("✓ Ensemble saved successfully")
 

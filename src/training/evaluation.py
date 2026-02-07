@@ -159,10 +159,10 @@ class ModelEvaluator:
     @staticmethod
     def compute_model_agreement(predictions: List[np.ndarray]) -> np.ndarray:
         """
-        Compute agreement between model predictions.
+        Compute agreement between model predictions based on standard deviation.
         
-        High agreement = all models predict same direction.
-        Low agreement = models disagree.
+        High agreement = all models predict similar probabilities.
+        Low agreement = models predict very different probabilities.
         
         Args:
             predictions: List of probability arrays
@@ -170,14 +170,11 @@ class ModelEvaluator:
         Returns:
             Agreement score per sample (0 to 1)
         """
-        # Convert to binary
-        binary = [(p > 0.5).astype(int) for p in predictions]
-        stacked = np.vstack(binary)
+        # Stack predictions: shape (n_models, n_samples)
+        stacked = np.vstack(predictions)
         
-        # Agreement is how close to unanimous
-        # 1.0 if all models agree, lower if they disagree
-        votes = stacked.mean(axis=0)  # Fraction voting home
-        agreement = 2 * np.abs(votes - 0.5)  # 0 if 50/50, 1 if unanimous
+        # Agreement = 1 - std (higher when models predict similar probabilities)
+        agreement = 1 - np.std(stacked, axis=0)
         
         return agreement
     
