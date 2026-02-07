@@ -134,10 +134,12 @@ After training, you'll have:
 python main.py train
 ```
 
-### 2. Check Confidence Scores
-- **High confidence (>60%)**: Trust the prediction
-- **Medium confidence (30-60%)**: Coin flip territory
-- **Low confidence (<30%)**: Very uncertain
+### 2. Check Confidence & Tier
+- **EXCELLENT tier (50%+ conf)**: Model is very confident (75%+ probability)
+- **STRONG/GOOD tier (30-50% conf)**: Reasonable confidence
+- **MODERATE/RISKY tier (<30% conf)**: Near toss-up
+
+**Note:** Confidence = how far from 50% the model's probability is. Tier just buckets this into labels.
 
 ### 3. Combine with Domain Knowledge
 The model doesn't know about:

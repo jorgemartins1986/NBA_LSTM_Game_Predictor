@@ -112,7 +112,7 @@ NBA_LSTM_Game_Predictor/
 ├── scripts/                      # Utility scripts
 │   └── setup_odds_api.py         # Odds API setup & test
 │
-├── tests/                        # Test suite (330 tests)
+├── tests/                        # Test suite (387 tests)
 │   ├── __init__.py
 │   ├── conftest.py               # Pytest fixtures
 │   ├── test_paths.py
@@ -148,7 +148,7 @@ NBA_LSTM_Game_Predictor/
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **330 tests** covering core functionality at **81% coverage**.
+The project includes a comprehensive test suite with **387 tests** covering core functionality at **80% coverage**.
 
 ### Run Tests
 
@@ -185,7 +185,7 @@ pytest --cov=src --cov-report=html
 | `nba_data_manager.py` | 82% | Core ELO system |
 | `odds_api.py` | 46% | External API (mocked) |
 
-**Total Coverage: 81%** (target: 80%)
+**Total Coverage: 80%** (target: 80%)
 
 ### Architecture (v2.0)
 
@@ -279,18 +279,20 @@ This will:
 
 ## 🎯 Bet Quality Tiers
 
-The prediction output includes bet-quality tiers based on model confidence:
+The prediction output includes tiers based on **model certainty** (how far the probability is from 50%):
 
-| Tier | Confidence | Probability | Recommendation |
-|------|------------|-------------|----------------|
-| ⭐⭐⭐⭐⭐ EXCELLENT | 50%+ | 75%+ | Strong edge |
-| ⭐⭐⭐⭐ STRONG | 40-50% | 70-75% | Good value |
-| ⭐⭐⭐ GOOD | 30-40% | 65-70% | Moderate edge |
-| ⭐⭐ MODERATE | 20-30% | 60-65% | Small edge |
-| ⭐ RISKY | 10-20% | 55-60% | Marginal |
-| ⛔ SKIP | <10% | <55% | No edge |
+| Tier | Confidence | Probability | Meaning |
+|------|------------|-------------|-------------|
+| ⭐⭐⭐⭐⭐ EXCELLENT | 50%+ | 75%+ | Very confident |
+| ⭐⭐⭐⭐ STRONG | 40-50% | 70-75% | Confident |
+| ⭐⭐⭐ GOOD | 30-40% | 65-70% | Moderately confident |
+| ⭐⭐ MODERATE | 20-30% | 60-65% | Slight lean |
+| ⭐ RISKY | 10-20% | 55-60% | Near toss-up |
+| ⛔ SKIP | <10% | <55% | No clear winner |
 
-**Model Agreement** indicates how much the 4 models agree (higher = more confidence in the prediction).
+**Note:** Tier and confidence measure the same thing - model certainty. Confidence is the raw percentage, tier is the bucketed label.
+
+**Model Agreement** indicates how much the 4 models agree (different from confidence). High agreement + high confidence = strongest predictions.
 
 ---
 

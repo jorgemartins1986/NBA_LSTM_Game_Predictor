@@ -63,9 +63,10 @@ def show_detailed_stats():
     print(f"   Date range: {completed['date'].min().strftime('%Y-%m-%d')} to {completed['date'].max().strftime('%Y-%m-%d')}")
     
     # ═══════════════════════════════════════════════════════════════════════
-    # BY BET QUALITY TIER
+    # BY BET QUALITY TIER (based on model certainty = |prob - 50%|)
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n📈 BY BET QUALITY TIER")
+    print(f"\n📈 BY BET QUALITY TIER (based on model certainty)")
+    print(f"   EXCELLENT=75%+ prob | STRONG=70%+ | GOOD=65%+ | MODERATE=60%+ | RISKY=55%+ | SKIP<55%")
     print(f"   {'Tier':<12} {'Record':>10} {'Accuracy':>10} {'ROI*':>10}")
     print(f"   {'-'*12} {'-'*10} {'-'*10} {'-'*10}")
     
@@ -86,10 +87,11 @@ def show_detailed_stats():
     print(f"   * ROI assumes standard -110 odds")
     
     # ═══════════════════════════════════════════════════════════════════════
-    # BY CONFIDENCE LEVEL (more granular)
+    # BY CONFIDENCE LEVEL (same as tier but with finer granularity)
     # ═══════════════════════════════════════════════════════════════════════
     if 'confidence' in completed.columns:
-        print(f"\n🎯 BY CONFIDENCE LEVEL")
+        print(f"\n🎯 BY CONFIDENCE LEVEL (finer buckets of model certainty)")
+        print(f"   Conf = |prob - 50%| × 2, so 45%+ conf = prob >95% or <5%")
         print(f"   {'Confidence':<12} {'Record':>10} {'Accuracy':>10} {'Avg Prob':>10}")
         print(f"   {'-'*12} {'-'*10} {'-'*10} {'-'*10}")
         
@@ -259,36 +261,54 @@ def show_detailed_stats():
     print(f"   Worst loss streak: L{worst_streak}")
     
     # ═══════════════════════════════════════════════════════════════════════
-    # PROFITABLE FILTERS
+    # PROFITABLE FILTERS (combining model certainty + model consensus)
     # ═══════════════════════════════════════════════════════════════════════
     print(f"\n💰 PROFITABLE FILTERS (>52.4% needed at -110 odds)")
+    print(f"   Combining tier (model certainty) with agreement (model consensus)")
     
     # Find profitable combinations
     profitable_combos = []
     
-    # By tier + confidence
-    for tier in ['EXCELLENT', 'STRONG', 'GOOD']:
-        for conf_low in [0.30, 0.35, 0.40]:
-            subset = completed[(completed['tier'] == tier) & (completed['confidence'] >= conf_low)]
-            if len(subset) >= 5:  # Minimum sample size
-                acc = subset['correct'].sum() / len(subset) * 100
-                if acc > 52.4:
-                    profitable_combos.append((f"{tier} + {conf_low*100:.0f}%+ conf", len(subset), acc))
-    
-    # By agreement + tier
-    for agree_low in [0.95, 0.98]:
-        for tier in ['EXCELLENT', 'STRONG', 'GOOD']:
+    # By tier + agreement (two different metrics - this is useful)
+    for tier in ['EXCELLENT', 'STRONG', 'GOOD', 'MODERATE']:
+        for agree_low in [0.90, 0.92, 0.95]:
             subset = completed[(completed['tier'] == tier) & (completed['model_agreement'] >= agree_low)]
             if len(subset) >= 5:
                 acc = subset['correct'].sum() / len(subset) * 100
                 if acc > 52.4:
                     profitable_combos.append((f"{tier} + {agree_low*100:.0f}%+ agree", len(subset), acc))
     
+    # By high probability ranges (clear favorites/underdogs)
+    if 'home_win_prob' in completed.columns:
+        # Strong favorites (75%+ either way)
+        strong_fav = completed[(completed['home_win_prob'] >= 0.75) | (completed['home_win_prob'] <= 0.25)]
+        if len(strong_fav) >= 5:
+            acc = strong_fav['correct'].sum() / len(strong_fav) * 100
+            if acc > 52.4:
+                profitable_combos.append(("75%+ favorites", len(strong_fav), acc))
+        
+        # Strong favorites + high agreement
+        for agree_low in [0.92, 0.95]:
+            subset = strong_fav[strong_fav['model_agreement'] >= agree_low]
+            if len(subset) >= 5:
+                acc = subset['correct'].sum() / len(subset) * 100
+                if acc > 52.4:
+                    profitable_combos.append((f"75%+ fav + {agree_low*100:.0f}%+ agree", len(subset), acc))
+    
+    # By agreement alone (across all tiers)
+    for agree_low in [0.92, 0.95, 0.98]:
+        subset = completed[completed['model_agreement'] >= agree_low]
+        if len(subset) >= 5:
+            acc = subset['correct'].sum() / len(subset) * 100
+            if acc > 52.4:
+                profitable_combos.append((f"All tiers + {agree_low*100:.0f}%+ agree", len(subset), acc))
+    
     if profitable_combos:
-        print(f"   {'Filter':<25} {'Games':>8} {'Accuracy':>10}")
-        print(f"   {'-'*25} {'-'*8} {'-'*10}")
+        print(f"   {'Filter':<28} {'Games':>8} {'Accuracy':>10}")
+        print(f"   {'-'*28} {'-'*8} {'-'*10}")
+        # Sort by accuracy, show top 10
         for combo, n, acc in sorted(profitable_combos, key=lambda x: -x[2])[:10]:
-            print(f"   {combo:<25} {n:>8} {acc:>9.1f}%")
+            print(f"   {combo:<28} {n:>8} {acc:>9.1f}%")
     else:
         print("   No profitable filters found with sufficient sample size.")
     
