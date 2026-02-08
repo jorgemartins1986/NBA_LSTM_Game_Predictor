@@ -77,14 +77,14 @@ def show_detailed_stats():
             tier_correct = int(tier_games['correct'].sum())
             tier_total = len(tier_games)
             tier_acc = tier_correct / tier_total * 100
-            # Simplified ROI assuming -110 odds (bet 110 to win 100)
-            # ROI = (wins * 100 - losses * 110) / (total * 110) * 100
+            # ROI at 1.91 decimal odds (European standard, same as American -110)
+            # Bet €1 to win €0.91 profit. ROI = (wins * 0.91 - losses) / total * 100
             losses = tier_total - tier_correct
-            roi = (tier_correct * 100 - losses * 110) / (tier_total * 110) * 100
+            roi = (tier_correct * 0.91 - losses) / tier_total * 100
             roi_str = f"{roi:+.1f}%" if roi != 0 else "0.0%"
             print(f"   {tier:<12} {tier_correct:>4}/{tier_total:<4} {tier_acc:>9.1f}% {roi_str:>10}")
     
-    print(f"   * ROI assumes standard -110 odds")
+    print(f"   * ROI assumes 1.91 decimal odds (breakeven = 52.4% accuracy)")
     
     # ═══════════════════════════════════════════════════════════════════════
     # BY CONFIDENCE LEVEL (same as tier but with finer granularity)
@@ -257,13 +257,13 @@ def show_detailed_stats():
             current_w = 0
             worst_streak = max(worst_streak, current_l)
     
-    print(f"   Best win streak: W{best_streak}")
-    print(f"   Worst loss streak: L{worst_streak}")
+    print(f"   Best win streak: W{best_streak} (most consecutive correct predictions)")
+    print(f"   Worst loss streak: L{worst_streak} (most consecutive wrong predictions)")
     
     # ═══════════════════════════════════════════════════════════════════════
     # PROFITABLE FILTERS (combining model certainty + model consensus)
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n💰 PROFITABLE FILTERS (>52.4% needed at -110 odds)")
+    print(f"\n💰 PROFITABLE FILTERS (>52.4% needed at 1.91 odds to profit)")
     print(f"   Filters are cumulative (e.g., 92%+ includes all games ≥92% agreement)")
     
     # Find profitable combinations
@@ -308,10 +308,10 @@ def show_detailed_stats():
         print(f"   {'-'*28} {'-'*8} {'-'*10} {'-'*10}")
         # Sort by accuracy, show top 10
         for combo, n, acc, tier, agree in sorted(profitable_combos, key=lambda x: -x[2])[:10]:
-            # Calculate ROI at -110 odds
+            # Calculate ROI at 1.91 decimal odds
             wins = int(round(acc * n / 100))
             losses = n - wins
-            roi = (wins * 100 - losses * 110) / (n * 110) * 100
+            roi = (wins * 0.91 - losses) / n * 100
             print(f"   {combo:<28} {n:>8} {acc:>9.1f}% {roi:>+9.1f}%")
         
         # Show best filter recommendation
