@@ -112,7 +112,7 @@ NBA_LSTM_Game_Predictor/
 ├── scripts/                      # Utility scripts
 │   └── setup_odds_api.py         # Odds API setup & test
 │
-├── tests/                        # Test suite (387 tests)
+├── tests/                        # Test suite (440 tests)
 │   ├── __init__.py
 │   ├── conftest.py               # Pytest fixtures
 │   ├── test_paths.py
@@ -122,15 +122,20 @@ NBA_LSTM_Game_Predictor/
 │   ├── test_data_manager_integration.py
 │   ├── test_odds_api.py
 │   ├── test_odds_api_integration.py
+│   ├── test_odds_api_features.py     # Odds static methods & enricher
 │   ├── test_ensemble_predictor.py
 │   ├── test_ensemble_integration.py
 │   ├── test_main.py
+│   ├── test_predict.py               # Game filtering (All-Star handling)
 │   ├── test_training_data_prep.py    # DataPreparation tests
 │   ├── test_training_trainers.py     # Trainer tests
 │   ├── test_training_evaluation.py   # Evaluator tests
 │   ├── test_training_ensemble.py     # EnsembleTrainer tests
+│   ├── test_training_stacking.py     # Stacking meta-model tests
 │   ├── test_prediction_features.py   # FeatureComputer tests
 │   ├── test_prediction_loader.py     # ModelLoader tests
+│   ├── test_prediction_nba_data.py   # NBA data helpers
+│   ├── test_prediction_nba_data_api.py # NBA API mocked tests
 │   └── test_prediction_pipeline.py   # Pipeline tests
 │
 ├── docs/                         # Documentation
@@ -148,7 +153,7 @@ NBA_LSTM_Game_Predictor/
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **387 tests** covering core functionality at **80% coverage**.
+The project includes a comprehensive test suite with **440 tests** covering core functionality at **87% coverage**.
 
 ### Run Tests
 
@@ -178,14 +183,15 @@ pytest --cov=src --cov-report=html
 | `training/data_prep.py` | 100% | Data preparation |
 | `prediction/pipeline.py` | 100% | Prediction pipeline |
 | `prediction/features.py` | 88% | Feature computation |
-| `training/ensemble.py` | 85% | Ensemble coordinator |
+| `prediction/nba_data.py` | 85% | NBA API data fetching |
+| `training/ensemble.py` | 81% | Ensemble coordinator + stacking |
 | `prediction/loader.py` | 85% | Model loading |
 | `training/evaluation.py` | 84% | Model evaluation |
 | `training/trainers.py` | 84% | Model trainers |
 | `nba_data_manager.py` | 82% | Core ELO system |
-| `odds_api.py` | 46% | External API (mocked) |
+| `odds_api.py` | 79% | Odds features & enricher |
 
-**Total Coverage: 80%** (target: 80%)
+**Total Coverage: 87%** (target: 80%)
 
 ### Architecture (v2.0)
 

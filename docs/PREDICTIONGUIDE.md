@@ -31,7 +31,7 @@ python main.py train
 ### Option 1: Automatic Today's Games
 
 ```bash
-python predict_todays_games.py
+python main.py predict
 ```
 
 **What it does:**
@@ -118,11 +118,15 @@ python main.py --stats
 
 ## 📊 Files Created
 
-After training, you'll have:
-- `nba_lstm_model.keras` - Final model
-- `nba_model_best.keras` - **Best model during training** ⭐ (use this!)
-- `scaler.pkl` - Feature scaler
-- `feature_columns.pkl` - Feature list for predictions
+After training, you'll have in `models/`:
+- `nba_ensemble_xgboost_1.json` - XGBoost model
+- `nba_ensemble_rf_2.pkl` - Random Forest model
+- `nba_ensemble_logistic_3.pkl` - Logistic Regression model
+- `nba_ensemble_model_4.keras` - LSTM neural network
+- `ensemble_scaler_*.pkl` - Feature scalers
+- `ensemble_feature_cols.pkl` - Feature list
+- `ensemble_meta_clf.pkl` - Stacking meta-learner
+- `ensemble_platt.pkl` - Platt calibrator
 
 ---
 
@@ -140,6 +144,8 @@ python main.py train
 - **MODERATE/RISKY tier (<30% conf)**: Near toss-up
 
 **Note:** Confidence = how far from 50% the model's probability is. Tier just buckets this into labels.
+
+**Special games:** Exhibition/All-Star games are automatically filtered out during prediction.
 
 ### 3. Combine with Domain Knowledge
 The model doesn't know about:
@@ -213,7 +219,8 @@ Try these improvements:
 4. **Improve further:**
    - Add injury data
    - Include player ratings
-   - Try ensemble methods
+   - Fine-tune ensemble weights
+   - Track ROI with `python main.py --stats`
 
 ---
 
