@@ -40,6 +40,40 @@ from src.prediction import (
 )
 
 
+def filter_regular_games(todays_games: list, all_teams: list) -> tuple:
+    """
+    Filter out special/exhibition games (All-Star, Rising Stars, etc.)
+    whose team IDs don't correspond to regular NBA franchises.
+    
+    Args:
+        todays_games: List of game dicts from the NBA API scoreboard.
+        all_teams: List of team dicts from nba_api.stats.static.teams.get_teams().
+    
+    Returns:
+        Tuple of (regular_games, skipped_games) where each is a list of dicts.
+        skipped_games entries have 'home_name' and 'away_name' keys added.
+    """
+    all_team_ids = {t['id'] for t in all_teams}
+    regular_games = []
+    skipped_games = []
+    
+    for game in todays_games:
+        if game.get('home_team_id') in all_team_ids and game.get('away_team_id') in all_team_ids:
+            regular_games.append(game)
+        else:
+            home_match = [t for t in all_teams if t['id'] == game.get('home_team_id')]
+            away_match = [t for t in all_teams if t['id'] == game.get('away_team_id')]
+            home_name = home_match[0]['full_name'] if home_match else f"Team #{game.get('home_team_id')}"
+            away_name = away_match[0]['full_name'] if away_match else f"Team #{game.get('away_team_id')}"
+            skipped_games.append({
+                **game,
+                'home_name': home_name,
+                'away_name': away_name,
+            })
+    
+    return regular_games, skipped_games
+
+
 def predict_todays_games(single_model: str = None):
     """
     Main prediction function.
@@ -124,8 +158,19 @@ def predict_todays_games(single_model: str = None):
     all_teams = teams.get_teams()
     predictions = []
     
-    for i, game in enumerate(todays_games):
-        print(f"\n🏀 Game {i+1}/{len(todays_games)}")
+    # Filter out special/exhibition games (All-Star, Rising Stars, etc.)
+    regular_games, skipped_games = filter_regular_games(todays_games, all_teams)
+    
+    for sg in skipped_games:
+        print(f"\n⚠️  Skipping special/exhibition game: {sg['away_name']} @ {sg['home_name']}")
+
+    if len(regular_games) == 0:
+        print("\n❌ No regular-season games to predict today.")
+        print("   (Only special/exhibition games found, e.g. All-Star)")
+        return
+
+    for i, game in enumerate(regular_games):
+        print(f"\n🏀 Game {i+1}/{len(regular_games)}")
         print("-"*70)
         
         # Get team names
@@ -287,7 +332,7 @@ def predict_todays_games(single_model: str = None):
     
     # Summary stats
     print(f"\n" + "-"*70)
-    print(f"   Total games: {len(predictions)}/{len(todays_games)}")
+    print(f"   Total games: {len(predictions)}/{len(regular_games)}")
     print(f"   Recommended bets: {len(good_bets)} (⭐⭐⭐ GOOD or better)")
 
 

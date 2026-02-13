@@ -87,25 +87,25 @@ class TestStatisticsCalculations:
         assert excellent['correct'].sum() == 1
     
     def test_roi_calculation(self):
-        """ROI should be correctly calculated at -110 odds"""
-        # If we bet $110 to win $100 on 10 games
-        # Win 6, lose 4
-        wins = 6
-        losses = 4
+        """ROI should be correctly calculated at 1.41 decimal odds"""
+        # Bet €1 to win €0.41 profit at 1.41 decimal odds
+        # Win 8, lose 2 out of 10 games
+        wins = 8
+        losses = 2
         total = wins + losses
         
-        # ROI = (wins * 100 - losses * 110) / (total * 110) * 100
-        roi = (wins * 100 - losses * 110) / (total * 110) * 100
+        # ROI = (wins * 0.41 - losses) / total * 100
+        roi = (wins * 0.41 - losses) / total * 100
         
-        assert abs(roi - 14.5) < 0.5  # ~14.5% ROI
+        assert abs(roi - 12.8) < 0.5  # ~12.8% ROI
     
     def test_negative_roi(self):
-        """Negative ROI for losing record"""
+        """Negative ROI for losing record at 1.41 decimal odds"""
         wins = 4
         losses = 6
         total = wins + losses
         
-        roi = (wins * 100 - losses * 110) / (total * 110) * 100
+        roi = (wins * 0.41 - losses) / total * 100
         
         assert roi < 0
 

@@ -77,14 +77,14 @@ def show_detailed_stats():
             tier_correct = int(tier_games['correct'].sum())
             tier_total = len(tier_games)
             tier_acc = tier_correct / tier_total * 100
-            # ROI at 1.91 decimal odds (European standard, same as American -110)
-            # Bet €1 to win €0.91 profit. ROI = (wins * 0.91 - losses) / total * 100
+            # ROI at 1.41 decimal odds (average observed odds)
+            # Bet €1 to win €0.41 profit. ROI = (wins * 0.41 - losses) / total * 100
             losses = tier_total - tier_correct
-            roi = (tier_correct * 0.91 - losses) / tier_total * 100
+            roi = (tier_correct * 0.41 - losses) / tier_total * 100
             roi_str = f"{roi:+.1f}%" if roi != 0 else "0.0%"
             print(f"   {tier:<12} {tier_correct:>4}/{tier_total:<4} {tier_acc:>9.1f}% {roi_str:>10}")
     
-    print(f"   * ROI assumes 1.91 decimal odds (breakeven = 52.4% accuracy)")
+    print(f"   * ROI assumes 1.41 decimal odds (breakeven = 70.9% accuracy)")
     
     # ═══════════════════════════════════════════════════════════════════════
     # BY CONFIDENCE LEVEL (same as tier but with finer granularity)
@@ -263,7 +263,7 @@ def show_detailed_stats():
     # ═══════════════════════════════════════════════════════════════════════
     # PROFITABLE FILTERS (combining model certainty + model consensus)
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n💰 PROFITABLE FILTERS (>52.4% needed at 1.91 odds to profit)")
+    print(f"\n💰 PROFITABLE FILTERS (>70.9% needed at 1.41 odds to profit)")
     print(f"   Filters are cumulative (e.g., 92%+ includes all games ≥92% agreement)")
     
     # Find profitable combinations
@@ -275,7 +275,7 @@ def show_detailed_stats():
             subset = completed[(completed['tier'] == tier) & (completed['model_agreement'] >= agree_low)]
             if len(subset) >= 5:
                 acc = subset['correct'].sum() / len(subset) * 100
-                if acc > 52.4:
+                if acc > 70.9:
                     profitable_combos.append((f"{tier} + {agree_low*100:.0f}%+ agree", len(subset), acc, tier, agree_low))
     
     # By high probability ranges (clear favorites/underdogs)
@@ -284,7 +284,7 @@ def show_detailed_stats():
         strong_fav = completed[(completed['home_win_prob'] >= 0.75) | (completed['home_win_prob'] <= 0.25)]
         if len(strong_fav) >= 5:
             acc = strong_fav['correct'].sum() / len(strong_fav) * 100
-            if acc > 52.4:
+            if acc > 70.9:
                 profitable_combos.append(("75%+ favorites", len(strong_fav), acc, 'FAV', 0))
         
         # Strong favorites + high agreement
@@ -292,7 +292,7 @@ def show_detailed_stats():
             subset = strong_fav[strong_fav['model_agreement'] >= agree_low]
             if len(subset) >= 5:
                 acc = subset['correct'].sum() / len(subset) * 100
-                if acc > 52.4:
+                if acc > 70.9:
                     profitable_combos.append((f"75%+ fav + {agree_low*100:.0f}%+ agree", len(subset), acc, 'FAV', agree_low))
     
     # By agreement alone (across all tiers)
@@ -300,7 +300,7 @@ def show_detailed_stats():
         subset = completed[completed['model_agreement'] >= agree_low]
         if len(subset) >= 5:
             acc = subset['correct'].sum() / len(subset) * 100
-            if acc > 52.4:
+            if acc > 70.9:
                 profitable_combos.append((f"All tiers + {agree_low*100:.0f}%+ agree", len(subset), acc, 'ALL', agree_low))
     
     if profitable_combos:
@@ -308,10 +308,10 @@ def show_detailed_stats():
         print(f"   {'-'*28} {'-'*8} {'-'*10} {'-'*10}")
         # Sort by accuracy, show top 10
         for combo, n, acc, tier, agree in sorted(profitable_combos, key=lambda x: -x[2])[:10]:
-            # Calculate ROI at 1.91 decimal odds
+            # Calculate ROI at 1.41 decimal odds
             wins = int(round(acc * n / 100))
             losses = n - wins
-            roi = (wins * 0.91 - losses) / n * 100
+            roi = (wins * 0.41 - losses) / n * 100
             print(f"   {combo:<28} {n:>8} {acc:>9.1f}% {roi:>+9.1f}%")
         
         # Show best filter recommendation
