@@ -8,11 +8,64 @@ Separated from prediction logic for testability.
 import pandas as pd
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.request
+import json
+import gzip
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:
     from backports.zoneinfo import ZoneInfo
+
+
+# Headers that stats.nba.com requires (Akamai CDN fingerprinting)
+_NBA_STATS_HEADERS = {
+    'Host': 'stats.nba.com',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'x-nba-stats-origin': 'stats',
+    'x-nba-stats-token': 'true',
+    'Connection': 'keep-alive',
+    'Referer': 'https://stats.nba.com/',
+    'Pragma': 'no-cache',
+    'Cache-Control': 'no-cache',
+}
+
+
+def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30) -> dict:
+    """Fetch data from stats.nba.com using urllib (bypasses CDN blocking of requests/urllib3).
+    
+    Args:
+        endpoint: API endpoint name (e.g., 'leaguegamefinder')
+        params: Query parameters dict
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Parsed JSON response dict
+    """
+    from urllib.parse import quote_plus
+    
+    sorted_params = sorted(params.items(), key=lambda kv: kv[0])
+    param_string = '&'.join(f'{k}={quote_plus(str(v))}' for k, v in sorted_params)
+    url = f'https://stats.nba.com/stats/{endpoint}?{param_string}'
+    
+    req = urllib.request.Request(url, headers=_NBA_STATS_HEADERS)
+    resp = urllib.request.urlopen(req, timeout=timeout)
+    data = resp.read()
+    
+    encoding = resp.headers.get('Content-Encoding', '')
+    if encoding == 'gzip':
+        data = gzip.decompress(data)
+    
+    return json.loads(data)
+
+
+def _result_set_to_df(result: dict, index: int = 0) -> pd.DataFrame:
+    """Convert an NBA stats API resultSets entry to a DataFrame."""
+    rs = result['resultSets'][index]
+    return pd.DataFrame(rs['rowSet'], columns=rs['headers'])
 
 
 def get_eastern_date() -> str:
@@ -35,11 +88,12 @@ def get_current_season() -> str:
 def get_live_standings(verbose: bool = True) -> Dict[int, Dict]:
     """Fetch current standings from NBA API.
     
+    Uses urllib directly to bypass CDN blocking of requests/urllib3.
+    
     Returns:
         dict: {team_id: {WINS, LOSSES, WIN_PCT, CONF_RANK, LEAGUE_RANK, GAMES_BACK, STREAK}}
     """
     import time
-    from nba_api.stats.endpoints import leaguestandings
     
     season = get_current_season()
     if verbose:
@@ -47,8 +101,23 @@ def get_live_standings(verbose: bool = True) -> Dict[int, Dict]:
     
     try:
         time.sleep(0.6)  # Rate limiting
-        ls = leaguestandings.LeagueStandings(season=season)
-        df = ls.get_data_frames()[0]
+        
+        # Primary: urllib-based fetch
+        try:
+            params = {
+                'LeagueID': '00',
+                'Season': season,
+                'SeasonType': 'Regular Season',
+            }
+            result = _fetch_nba_stats('leaguestandingsv3', params, timeout=30)
+            rs = result['resultSets'][0]
+            df = pd.DataFrame(rs['rowSet'], columns=rs['headers'])
+        except Exception as urllib_err:
+            if verbose:
+                print(f"   ⚠ Direct fetch failed ({urllib_err}), trying nba_api...")
+            from nba_api.stats.endpoints import leaguestandings
+            ls = leaguestandings.LeagueStandings(season=season, timeout=60)
+            df = ls.get_data_frames()[0]
         
         standings = {}
         for _, row in df.iterrows():
@@ -92,8 +161,8 @@ def get_todays_games(verbose: bool = True) -> Tuple[List[Dict], str, bool]:
     Uses ScoreboardV2 (stats API) which shows scheduled games for today,
     with live scoreboard as fallback for game status.
     """
+    import time
     from nba_api.live.nba.endpoints import scoreboard
-    from nba_api.stats.endpoints import scoreboardv2
     from nba_api.stats.static import teams
     
     game_date_str = get_eastern_date()
@@ -101,9 +170,22 @@ def get_todays_games(verbose: bool = True) -> Tuple[List[Dict], str, bool]:
     team_id_to_info = {t['id']: t for t in all_teams_list}
     
     try:
-        # Use ScoreboardV2 which has scheduled games (not just live/recent)
-        sb = scoreboardv2.ScoreboardV2(game_date=game_date_str)
-        games_df = sb.get_data_frames()[0]  # GameHeader dataframe
+        # Primary: urllib-based fetch of ScoreboardV2 (bypasses CDN blocking)
+        time.sleep(0.6)
+        try:
+            params = {
+                'DayOffset': '0',
+                'GameDate': game_date_str,
+                'LeagueID': '00',
+            }
+            result = _fetch_nba_stats('scoreboardv2', params, timeout=30)
+            games_df = _result_set_to_df(result, index=0)  # GameHeader
+        except Exception as urllib_err:
+            if verbose:
+                print(f"   ⚠ Direct fetch failed ({urllib_err}), trying nba_api...")
+            from nba_api.stats.endpoints import scoreboardv2
+            sb = scoreboardv2.ScoreboardV2(game_date=game_date_str, timeout=60)
+            games_df = sb.get_data_frames()[0]
         
         if len(games_df) == 0:
             if verbose:
@@ -164,6 +246,9 @@ def get_todays_games(verbose: bool = True) -> Tuple[List[Dict], str, bool]:
 def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame:
     """Fetch all games for a season.
     
+    Uses urllib directly to bypass CDN blocking of requests/urllib3.
+    Falls back to nba_api if urllib fails.
+    
     Args:
         season: Season string (e.g., '2025-26'). Defaults to current season.
         verbose: Whether to print progress.
@@ -171,7 +256,7 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
     Returns:
         DataFrame with game data sorted by date.
     """
-    from nba_api.stats.endpoints import leaguegamefinder
+    import time
     
     if season is None:
         season = get_current_season()
@@ -179,18 +264,78 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
     if verbose:
         print(f"📊 Fetching games for {season} season...")
     
-    gamefinder = leaguegamefinder.LeagueGameFinder(
-        season_nullable=season,
-        league_id_nullable='00'
-    )
-    games_df = gamefinder.get_data_frames()[0]
-    games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
-    games_df = games_df.sort_values('GAME_DATE')
-    
-    if verbose:
-        print(f"✓ Loaded {len(games_df)} games from {season} season")
-    
-    return games_df
+    # Primary: urllib-based fetch (bypasses Akamai CDN blocking)
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            time.sleep(0.6)  # Rate limiting
+            params = {
+                'Conference': '',
+                'DateFrom': '',
+                'DateTo': '',
+                'Division': '',
+                'DraftNumber': '',
+                'DraftRound': '',
+                'DraftTeamID': '',
+                'DraftYear': '',
+                'GameID': '',
+                'LeagueID': '00',
+                'Location': '',
+                'Outcome': '',
+                'PORound': '',
+                'PlayerID': '',
+                'PlayerOrTeam': 'T',
+                'RookieYear': '',
+                'Season': season,
+                'SeasonSegment': '',
+                'SeasonType': 'Regular Season',
+                'StarterBench': '',
+                'TeamID': '',
+                'VsConference': '',
+                'VsDivision': '',
+                'VsTeamID': '',
+                'YearsExperience': '',
+            }
+            result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
+            games_df = _result_set_to_df(result, index=0)
+            games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+            games_df = games_df.sort_values('GAME_DATE')
+            
+            if verbose:
+                print(f"✓ Loaded {len(games_df)} games from {season} season")
+            
+            return games_df
+        except Exception as e:
+            if attempt < max_retries:
+                wait = attempt * 3
+                if verbose:
+                    print(f"⚠ NBA API error (attempt {attempt}/{max_retries}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                if verbose:
+                    print(f"⚠ Direct fetch failed after {max_retries} attempts: {e}")
+                    print("  Trying nba_api fallback...")
+                # Final fallback: try nba_api (uses requests)
+                try:
+                    from nba_api.stats.endpoints import leaguegamefinder
+                    time.sleep(1)
+                    gamefinder = leaguegamefinder.LeagueGameFinder(
+                        season_nullable=season,
+                        league_id_nullable='00',
+                        timeout=120
+                    )
+                    games_df = gamefinder.get_data_frames()[0]
+                    games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+                    games_df = games_df.sort_values('GAME_DATE')
+                    if verbose:
+                        print(f"✓ Loaded {len(games_df)} games from {season} season (via fallback)")
+                    return games_df
+                except Exception as fallback_err:
+                    raise RuntimeError(
+                        f"Failed to fetch season games. "
+                        f"NBA API may be temporarily unavailable. "
+                        f"urllib error: {e} | nba_api error: {fallback_err}"
+                    ) from fallback_err
 
 
 def get_recent_team_stats(team_id: int, games_df: pd.DataFrame, window_size: int = 20) -> Optional[Dict]:
