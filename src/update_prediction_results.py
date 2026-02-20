@@ -12,9 +12,9 @@ Usage:
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.static import teams
 from .paths import PREDICTION_HISTORY_FILE
+from .prediction.nba_data import _fetch_nba_stats, _result_set_to_df
 import os
 import sys
 import time
@@ -30,12 +30,37 @@ def get_game_results(date_str):
         Dict mapping "Away Team vs Home Team" -> winner team name
     """
     try:
-        # Fetch all games from current season
-        gamefinder = leaguegamefinder.LeagueGameFinder(
-            season_nullable='2025-26',
-            league_id_nullable='00'
-        )
-        games_df = gamefinder.get_data_frames()[0]
+        # Fetch all games from current season using urllib (bypasses CDN blocking)
+        time.sleep(0.6)  # Rate limiting
+        params = {
+            'Conference': '',
+            'DateFrom': '',
+            'DateTo': '',
+            'Division': '',
+            'DraftNumber': '',
+            'DraftRound': '',
+            'DraftTeamID': '',
+            'DraftYear': '',
+            'GameID': '',
+            'LeagueID': '00',
+            'Location': '',
+            'Outcome': '',
+            'PORound': '',
+            'PlayerID': '',
+            'PlayerOrTeam': 'T',
+            'RookieYear': '',
+            'Season': '2025-26',
+            'SeasonSegment': '',
+            'SeasonType': 'Regular Season',
+            'StarterBench': '',
+            'TeamID': '',
+            'VsConference': '',
+            'VsDivision': '',
+            'VsTeamID': '',
+            'YearsExperience': '',
+        }
+        result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
+        games_df = _result_set_to_df(result, index=0)
         games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
         
         # Filter to the specific date
