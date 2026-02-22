@@ -24,6 +24,156 @@ sys.path.insert(0, os.path.dirname(__file__))
 from src.paths import PREDICTION_HISTORY_FILE
 
 
+def get_profitable_filters(min_games: int = 5, min_accuracy: float = 70.9):
+    """Compute currently profitable filters from prediction history.
+
+    Returns a list of dicts, each with:
+        name       : human-readable filter label
+        n_games    : sample size
+        accuracy   : hit-rate %
+        roi        : estimated ROI % at 1.41 decimal odds
+        tier       : tier requirement (or 'FAV' / 'ALL')
+        min_agree  : minimum model_agreement threshold (0 = no requirement)
+        is_fav     : whether only 75%+ favorites qualify
+    Sorted by accuracy descending.
+    """
+    if not os.path.exists(PREDICTION_HISTORY_FILE):
+        return []
+
+    df = pd.read_csv(PREDICTION_HISTORY_FILE)
+    completed = df[df['correct'].notna() & (df['correct'] != '')].copy()
+    if len(completed) == 0:
+        return []
+
+    completed['correct'] = completed['correct'].astype(int)
+    if 'home_win_prob' in completed.columns:
+        completed['home_win_prob'] = pd.to_numeric(completed['home_win_prob'], errors='coerce')
+    if 'model_agreement' in completed.columns:
+        completed['model_agreement'] = pd.to_numeric(completed['model_agreement'], errors='coerce')
+
+    filters = []
+
+    # --- Tier + agreement combinations ---
+    for tier in ['EXCELLENT', 'STRONG', 'GOOD', 'MODERATE', 'RISKY', 'SKIP']:
+        for agree_low in [0.90, 0.92, 0.95, 0.98]:
+            subset = completed[(completed['tier'] == tier) & (completed['model_agreement'] >= agree_low)]
+            if len(subset) >= min_games:
+                acc = subset['correct'].sum() / len(subset) * 100
+                if acc > min_accuracy:
+                    filters.append({
+                        'name': f"{tier} + {agree_low*100:.0f}%+ agree",
+                        'n_games': len(subset),
+                        'accuracy': acc,
+                        'tier': tier,
+                        'min_agree': agree_low,
+                        'is_fav': False,
+                    })
+
+    # --- 75%+ favorites ---
+    if 'home_win_prob' in completed.columns:
+        strong_fav = completed[
+            (completed['home_win_prob'] >= 0.75) | (completed['home_win_prob'] <= 0.25)
+        ]
+        if len(strong_fav) >= min_games:
+            acc = strong_fav['correct'].sum() / len(strong_fav) * 100
+            if acc > min_accuracy:
+                filters.append({
+                    'name': "75%+ favorites",
+                    'n_games': len(strong_fav),
+                    'accuracy': acc,
+                    'tier': 'FAV',
+                    'min_agree': 0,
+                    'is_fav': True,
+                })
+
+        # 75%+ fav + agreement
+        for agree_low in [0.92, 0.95, 0.98]:
+            subset = strong_fav[strong_fav['model_agreement'] >= agree_low]
+            if len(subset) >= min_games:
+                acc = subset['correct'].sum() / len(subset) * 100
+                if acc > min_accuracy:
+                    filters.append({
+                        'name': f"75%+ fav + {agree_low*100:.0f}%+ agree",
+                        'n_games': len(subset),
+                        'accuracy': acc,
+                        'tier': 'FAV',
+                        'min_agree': agree_low,
+                        'is_fav': True,
+                    })
+
+    # --- Agreement alone (all tiers) ---
+    for agree_low in [0.90, 0.92, 0.95, 0.98]:
+        subset = completed[completed['model_agreement'] >= agree_low]
+        if len(subset) >= min_games:
+            acc = subset['correct'].sum() / len(subset) * 100
+            if acc > min_accuracy:
+                filters.append({
+                    'name': f"All tiers + {agree_low*100:.0f}%+ agree",
+                    'n_games': len(subset),
+                    'accuracy': acc,
+                    'tier': 'ALL',
+                    'min_agree': agree_low,
+                    'is_fav': False,
+                })
+
+    # Compute ROI for each
+    for f in filters:
+        wins = int(round(f['accuracy'] * f['n_games'] / 100))
+        losses = f['n_games'] - wins
+        f['roi'] = (wins * 0.41 - losses) / f['n_games'] * 100
+
+    return sorted(filters, key=lambda x: -x['accuracy'])
+
+
+def game_matches_filter(pred: dict, filt: dict) -> bool:
+    """Check if a single game prediction matches a profitable filter.
+
+    Args:
+        pred: dict with keys confidence, home_win_prob, model_agreement, tier_short
+        filt: filter dict from get_profitable_filters()
+    """
+    # Determine the game's tier label
+    conf = pred.get('confidence', 0)
+    if conf >= 0.50:
+        game_tier = 'EXCELLENT'
+    elif conf >= 0.40:
+        game_tier = 'STRONG'
+    elif conf >= 0.30:
+        game_tier = 'GOOD'
+    elif conf >= 0.20:
+        game_tier = 'MODERATE'
+    elif conf >= 0.10:
+        game_tier = 'RISKY'
+    else:
+        game_tier = 'SKIP'
+
+    agree = pred.get('model_agreement', 0)
+    home_prob = pred.get('home_win_prob', 0.5)
+
+    # Check tier requirement
+    tier_req = filt['tier']
+    if tier_req == 'ALL':
+        pass  # Any tier qualifies
+    elif tier_req == 'FAV':
+        # Must be a 75%+ favorite
+        if not (home_prob >= 0.75 or home_prob <= 0.25):
+            return False
+    else:
+        # Exact tier match
+        if game_tier != tier_req:
+            return False
+
+    # Check favourite requirement (for combined filters)
+    if filt['is_fav'] and not (home_prob >= 0.75 or home_prob <= 0.25):
+        return False
+
+    # Check agreement threshold
+    if filt['min_agree'] > 0 and agree < filt['min_agree']:
+        return False
+
+    return True
+
+
 def show_detailed_stats():
     """Display comprehensive prediction accuracy statistics"""
     if not os.path.exists(PREDICTION_HISTORY_FILE):
@@ -266,57 +416,16 @@ def show_detailed_stats():
     print(f"\n💰 PROFITABLE FILTERS (>70.9% needed at 1.41 odds to profit)")
     print(f"   Filters are cumulative (e.g., 92%+ includes all games ≥92% agreement)")
     
-    # Find profitable combinations
-    profitable_combos = []
-    
-    # By tier + agreement (two different metrics - this is useful)
-    for tier in ['EXCELLENT', 'STRONG', 'GOOD', 'MODERATE']:
-        for agree_low in [0.90, 0.92, 0.95, 0.98]:
-            subset = completed[(completed['tier'] == tier) & (completed['model_agreement'] >= agree_low)]
-            if len(subset) >= 5:
-                acc = subset['correct'].sum() / len(subset) * 100
-                if acc > 70.9:
-                    profitable_combos.append((f"{tier} + {agree_low*100:.0f}%+ agree", len(subset), acc, tier, agree_low))
-    
-    # By high probability ranges (clear favorites/underdogs)
-    if 'home_win_prob' in completed.columns:
-        # Strong favorites (75%+ either way)
-        strong_fav = completed[(completed['home_win_prob'] >= 0.75) | (completed['home_win_prob'] <= 0.25)]
-        if len(strong_fav) >= 5:
-            acc = strong_fav['correct'].sum() / len(strong_fav) * 100
-            if acc > 70.9:
-                profitable_combos.append(("75%+ favorites", len(strong_fav), acc, 'FAV', 0))
-        
-        # Strong favorites + high agreement
-        for agree_low in [0.92, 0.95, 0.98]:
-            subset = strong_fav[strong_fav['model_agreement'] >= agree_low]
-            if len(subset) >= 5:
-                acc = subset['correct'].sum() / len(subset) * 100
-                if acc > 70.9:
-                    profitable_combos.append((f"75%+ fav + {agree_low*100:.0f}%+ agree", len(subset), acc, 'FAV', agree_low))
-    
-    # By agreement alone (across all tiers)
-    for agree_low in [0.90, 0.92, 0.95, 0.98]:
-        subset = completed[completed['model_agreement'] >= agree_low]
-        if len(subset) >= 5:
-            acc = subset['correct'].sum() / len(subset) * 100
-            if acc > 70.9:
-                profitable_combos.append((f"All tiers + {agree_low*100:.0f}%+ agree", len(subset), acc, 'ALL', agree_low))
+    profitable_combos = get_profitable_filters()
     
     if profitable_combos:
         print(f"   {'Filter':<28} {'Games':>8} {'Accuracy':>10} {'ROI':>10}")
         print(f"   {'-'*28} {'-'*8} {'-'*10} {'-'*10}")
-        # Sort by accuracy, show top 10
-        for combo, n, acc, tier, agree in sorted(profitable_combos, key=lambda x: -x[2])[:10]:
-            # Calculate ROI at 1.41 decimal odds
-            wins = int(round(acc * n / 100))
-            losses = n - wins
-            roi = (wins * 0.41 - losses) / n * 100
-            print(f"   {combo:<28} {n:>8} {acc:>9.1f}% {roi:>+9.1f}%")
+        for f in profitable_combos[:10]:
+            print(f"   {f['name']:<28} {f['n_games']:>8} {f['accuracy']:>9.1f}% {f['roi']:>+9.1f}%")
         
-        # Show best filter recommendation
-        best = sorted(profitable_combos, key=lambda x: -x[2])[0]
-        print(f"\n   ✅ Best filter: {best[0]} ({best[1]} games, {best[2]:.1f}% accuracy)")
+        best = profitable_combos[0]
+        print(f"\n   ✅ Best filter: {best['name']} ({best['n_games']} games, {best['accuracy']:.1f}% accuracy)")
     else:
         print("   No profitable filters found with sufficient sample size.")
     

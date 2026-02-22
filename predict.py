@@ -309,7 +309,7 @@ def predict_todays_games(single_model: str = None):
     if predictions and not (all_finished and game_date != eastern_today):
         save_predictions_to_history(predictions, game_date)
     
-    # Summary - show GOOD and above bets
+    # ── Section 1: Tier-based recommendations (GOOD and above) ─────────
     print("\n" + "="*70)
     print("SUMMARY - ENSEMBLE PREDICTIONS")
     print("="*70)
@@ -320,6 +320,7 @@ def predict_todays_games(single_model: str = None):
     # Show only GOOD and above (confidence >= 30%)
     good_bets = [p for p in sorted_preds if p['confidence'] >= 0.30]
     
+    print("\n📋 TIER PICKS (⭐⭐⭐ GOOD or better)")
     if good_bets:
         for p in good_bets:
             tier_emoji = "⭐⭐⭐⭐⭐" if p['confidence'] >= 0.50 else "⭐⭐⭐⭐" if p['confidence'] >= 0.40 else "⭐⭐⭐"
@@ -330,10 +331,48 @@ def predict_todays_games(single_model: str = None):
     else:
         print("\n   No high-confidence picks today (GOOD or better).")
     
+    # ── Section 2: Profitable filter picks (dynamic from history) ──────
+    from main import get_profitable_filters, game_matches_filter
+
+    active_filters = get_profitable_filters()
+    
+    if active_filters and predictions:
+        print(f"\n{'─'*70}")
+        print("💰 PROFITABLE FILTER PICKS (based on tracked prediction history)")
+        print(f"   {len(active_filters)} active filter(s) with >70.9% accuracy")
+
+        # For each game, find which filters it matches
+        filter_picks = []  # list of (pred, matched_filters)
+        for p in sorted_preds:
+            matched = [f for f in active_filters if game_matches_filter(p, f)]
+            if matched:
+                filter_picks.append((p, matched))
+
+        if filter_picks:
+            # Deduplicate: a game appears once, with its best matching filter
+            for p, matched in filter_picks:
+                best_f = matched[0]  # Already sorted by accuracy
+                tier_emoji = "⭐⭐⭐⭐⭐" if p['confidence'] >= 0.50 else "⭐⭐⭐⭐" if p['confidence'] >= 0.40 else "⭐⭐⭐" if p['confidence'] >= 0.30 else "⭐⭐" if p['confidence'] >= 0.20 else "⭐"
+                print(f"\n{tier_emoji} {p['away_team']} @ {p['home_team']}")
+                print(f"   → {p['predicted_winner']} ({p['home_win_prob']*100:.1f}% prob, {p['model_agreement']*100:.0f}% agree)")
+                filter_tags = ", ".join(f['name'] for f in matched[:3])
+                print(f"   💰 Matches: {filter_tags}")
+                print(f"   📊 Best filter: {best_f['name']} — {best_f['accuracy']:.1f}% acc ({best_f['n_games']} games) → ROI {best_f['roi']:+.1f}%")
+        else:
+            print("\n   No games today match any profitable filter.")
+    
     # Summary stats
-    print(f"\n" + "-"*70)
+    filter_pick_count = len(filter_picks) if active_filters and predictions else 0
+    print(f"\n{'─'*70}")
     print(f"   Total games: {len(predictions)}/{len(regular_games)}")
-    print(f"   Recommended bets: {len(good_bets)} (⭐⭐⭐ GOOD or better)")
+    print(f"   Tier picks: {len(good_bets)} (⭐⭐⭐ GOOD or better)")
+    print(f"   Filter picks: {filter_pick_count} (from profitable filters)")
+    if filter_pick_count > 0:
+        # Show unique games across both categories
+        tier_games = {(p['home_team'], p['away_team']) for p in good_bets}
+        filter_games = {(p['home_team'], p['away_team']) for p, _ in filter_picks}
+        all_recommended = tier_games | filter_games
+        print(f"   Total unique recommended: {len(all_recommended)}")
 
 
 def main():
