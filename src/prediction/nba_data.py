@@ -45,21 +45,31 @@ def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30) -> dict:
     Returns:
         Parsed JSON response dict
     """
+    import time
     from urllib.parse import quote_plus
     
     sorted_params = sorted(params.items(), key=lambda kv: kv[0])
     param_string = '&'.join(f'{k}={quote_plus(str(v))}' for k, v in sorted_params)
     url = f'https://stats.nba.com/stats/{endpoint}?{param_string}'
     
-    req = urllib.request.Request(url, headers=_NBA_STATS_HEADERS)
-    resp = urllib.request.urlopen(req, timeout=timeout)
-    data = resp.read()
+    last_err = None
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                time.sleep(2 * attempt)
+            req = urllib.request.Request(url, headers=_NBA_STATS_HEADERS)
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            data = resp.read()
+            
+            encoding = resp.headers.get('Content-Encoding', '')
+            if encoding == 'gzip':
+                data = gzip.decompress(data)
+            
+            return json.loads(data)
+        except (TimeoutError, urllib.error.URLError) as e:
+            last_err = e
     
-    encoding = resp.headers.get('Content-Encoding', '')
-    if encoding == 'gzip':
-        data = gzip.decompress(data)
-    
-    return json.loads(data)
+    raise last_err
 
 
 def _result_set_to_df(result: dict, index: int = 0) -> pd.DataFrame:
@@ -264,78 +274,69 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
     if verbose:
         print(f"📊 Fetching games for {season} season...")
     
-    # Primary: urllib-based fetch (bypasses Akamai CDN blocking)
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
+    try:
+        time.sleep(0.6)  # Rate limiting
+        params = {
+            'Conference': '',
+            'DateFrom': '',
+            'DateTo': '',
+            'Division': '',
+            'DraftNumber': '',
+            'DraftRound': '',
+            'DraftTeamID': '',
+            'DraftYear': '',
+            'GameID': '',
+            'LeagueID': '00',
+            'Location': '',
+            'Outcome': '',
+            'PORound': '',
+            'PlayerID': '',
+            'PlayerOrTeam': 'T',
+            'RookieYear': '',
+            'Season': season,
+            'SeasonSegment': '',
+            'SeasonType': 'Regular Season',
+            'StarterBench': '',
+            'TeamID': '',
+            'VsConference': '',
+            'VsDivision': '',
+            'VsTeamID': '',
+            'YearsExperience': '',
+        }
+        result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
+        games_df = _result_set_to_df(result, index=0)
+        games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+        games_df = games_df.sort_values('GAME_DATE')
+        
+        if verbose:
+            print(f"✓ Loaded {len(games_df)} games from {season} season")
+        
+        return games_df
+    except Exception as e:
+        if verbose:
+            print(f"⚠ Direct fetch failed: {e}")
+            print("  Trying nba_api fallback...")
+        # Fallback: try nba_api (uses requests)
         try:
-            time.sleep(0.6)  # Rate limiting
-            params = {
-                'Conference': '',
-                'DateFrom': '',
-                'DateTo': '',
-                'Division': '',
-                'DraftNumber': '',
-                'DraftRound': '',
-                'DraftTeamID': '',
-                'DraftYear': '',
-                'GameID': '',
-                'LeagueID': '00',
-                'Location': '',
-                'Outcome': '',
-                'PORound': '',
-                'PlayerID': '',
-                'PlayerOrTeam': 'T',
-                'RookieYear': '',
-                'Season': season,
-                'SeasonSegment': '',
-                'SeasonType': 'Regular Season',
-                'StarterBench': '',
-                'TeamID': '',
-                'VsConference': '',
-                'VsDivision': '',
-                'VsTeamID': '',
-                'YearsExperience': '',
-            }
-            result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
-            games_df = _result_set_to_df(result, index=0)
+            from nba_api.stats.endpoints import leaguegamefinder
+            time.sleep(1)
+            gamefinder = leaguegamefinder.LeagueGameFinder(
+                season_nullable=season,
+                league_id_nullable='00',
+                timeout=120
+            )
+            games_df = gamefinder.get_data_frames()[0]
             games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
             games_df = games_df.sort_values('GAME_DATE')
-            
             if verbose:
-                print(f"✓ Loaded {len(games_df)} games from {season} season")
-            
+                print(f"✓ Loaded {len(games_df)} games from {season} season (via fallback)")
             return games_df
-        except Exception as e:
-            if attempt < max_retries:
-                wait = attempt * 3
-                if verbose:
-                    print(f"⚠ NBA API error (attempt {attempt}/{max_retries}), retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                if verbose:
-                    print(f"⚠ Direct fetch failed after {max_retries} attempts: {e}")
-                    print("  Trying nba_api fallback...")
-                # Final fallback: try nba_api (uses requests)
-                try:
-                    from nba_api.stats.endpoints import leaguegamefinder
-                    time.sleep(1)
-                    gamefinder = leaguegamefinder.LeagueGameFinder(
-                        season_nullable=season,
-                        league_id_nullable='00',
-                        timeout=120
-                    )
-                    games_df = gamefinder.get_data_frames()[0]
-                    games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
-                    games_df = games_df.sort_values('GAME_DATE')
-                    if verbose:
-                        print(f"✓ Loaded {len(games_df)} games from {season} season (via fallback)")
-                    return games_df
-                except Exception as fallback_err:
-                    raise RuntimeError(
-                        f"Failed to fetch season games. "
-                        f"NBA API may be temporarily unavailable. "
-                        f"urllib error: {e} | nba_api error: {fallback_err}"
-                    ) from fallback_err
+        except Exception as fallback_err:
+            raise RuntimeError(
+                f"Failed to fetch season games. "
+                f"NBA API may be temporarily unavailable. "
+                f"urllib error: {e} | nba_api error: {fallback_err}"
+            ) from fallback_err
 
 
 def get_recent_team_stats(team_id: int, games_df: pd.DataFrame, window_size: int = 20) -> Optional[Dict]:

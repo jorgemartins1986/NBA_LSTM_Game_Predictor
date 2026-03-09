@@ -116,9 +116,11 @@ class TestGetLiveStandings:
         assert standings[20]['CONF_RANK'] == 9
 
     @patch('time.sleep')
+    @patch('nba_api.stats.endpoints.leaguestandings.LeagueStandings')
     @patch('src.prediction.nba_data._fetch_nba_stats')
-    def test_api_failure_returns_empty(self, mock_fetch, _sleep):
+    def test_api_failure_returns_empty(self, mock_fetch, mock_ls, _sleep):
         mock_fetch.side_effect = Exception("API down")
+        mock_ls.side_effect = Exception("Fallback also down")
 
         standings = get_live_standings(verbose=False)
 
