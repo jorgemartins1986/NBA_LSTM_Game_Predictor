@@ -9,8 +9,10 @@ import pandas as pd
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
+import urllib.error
 import json
 import gzip
+import ssl
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -21,9 +23,9 @@ except ImportError:
 # Headers that stats.nba.com requires (Akamai CDN fingerprinting)
 _NBA_STATS_HEADERS = {
     'Host': 'stats.nba.com',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'x-nba-stats-origin': 'stats',
     'x-nba-stats-token': 'true',
@@ -31,7 +33,21 @@ _NBA_STATS_HEADERS = {
     'Referer': 'https://stats.nba.com/',
     'Pragma': 'no-cache',
     'Cache-Control': 'no-cache',
+    'sec-ch-ua': '"Chromium";v="133", "Not(A:Brand";v="99", "Google Chrome";v="133"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
 }
+
+# Custom SSL context with browser-like cipher suite
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.set_ciphers('DEFAULT:@SECLEVEL=1')
+_SSL_CONTEXT.check_hostname = True
+_SSL_CONTEXT.verify_mode = ssl.CERT_REQUIRED
+_HTTPS_HANDLER = urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
+_OPENER = urllib.request.build_opener(_HTTPS_HANDLER)
 
 
 def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30) -> dict:
@@ -58,7 +74,7 @@ def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30) -> dict:
             if attempt > 0:
                 time.sleep(2 * attempt)
             req = urllib.request.Request(url, headers=_NBA_STATS_HEADERS)
-            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp = _OPENER.open(req, timeout=timeout)
             data = resp.read()
             
             encoding = resp.headers.get('Content-Encoding', '')
@@ -66,7 +82,7 @@ def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30) -> dict:
                 data = gzip.decompress(data)
             
             return json.loads(data)
-        except (TimeoutError, urllib.error.URLError) as e:
+        except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as e:
             last_err = e
     
     raise last_err
