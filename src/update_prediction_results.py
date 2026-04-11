@@ -14,10 +14,50 @@ import numpy as np
 from datetime import datetime, timedelta
 from nba_api.stats.static import teams
 from .paths import PREDICTION_HISTORY_FILE
-from .prediction.nba_data import _fetch_nba_stats, _result_set_to_df
+from .prediction.nba_data import _fetch_nba_stats, _result_set_to_df, get_current_season
 import os
 import sys
 import time
+
+
+def _season_from_date(date_str):
+    """Infer NBA season string from a YYYY-MM-DD date."""
+    target_date = pd.to_datetime(date_str)
+    start_year = target_date.year if target_date.month >= 10 else target_date.year - 1
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def _get_scoreboard_status(date_str):
+    """Return lightweight status info for a date from scoreboardv2."""
+    try:
+        params = {
+            'DayOffset': '0',
+            'GameDate': date_str,
+            'LeagueID': '00',
+        }
+        result = _fetch_nba_stats('scoreboardv2', params, timeout=60)
+        games_df = _result_set_to_df(result, index=0)
+
+        if len(games_df) == 0:
+            return {
+                'n_games': 0,
+                'all_final': False,
+                'any_final': False,
+                'status_counts': {},
+            }
+
+        status_counts = games_df['GAME_STATUS_TEXT'].value_counts(dropna=False).to_dict()
+        status_text = games_df['GAME_STATUS_TEXT'].astype(str)
+        is_final = status_text.str.contains('Final', case=False, na=False)
+
+        return {
+            'n_games': len(games_df),
+            'all_final': bool(is_final.all()),
+            'any_final': bool(is_final.any()),
+            'status_counts': status_counts,
+        }
+    except Exception:
+        return None
 
 
 def get_game_results(date_str):
@@ -30,12 +70,20 @@ def get_game_results(date_str):
         Dict mapping "Away Team vs Home Team" -> winner team name
     """
     try:
-        # Fetch all games from current season using urllib (bypasses CDN blocking)
+        season = _season_from_date(date_str)
+        current_season = get_current_season()
+        target_date = pd.to_datetime(date_str)
+        date_us = target_date.strftime('%m/%d/%Y')
+
+        if season != current_season:
+            print(f"   Checking season {season} for {date_str} (current season is {current_season})")
+
+        # Fetch only the target date (avoids leaguegamefinder season row caps).
         time.sleep(0.6)  # Rate limiting
         params = {
             'Conference': '',
-            'DateFrom': '',
-            'DateTo': '',
+            'DateFrom': date_us,
+            'DateTo': date_us,
             'Division': '',
             'DraftNumber': '',
             'DraftRound': '',
@@ -49,7 +97,7 @@ def get_game_results(date_str):
             'PlayerID': '',
             'PlayerOrTeam': 'T',
             'RookieYear': '',
-            'Season': '2025-26',
+            'Season': season,
             'SeasonSegment': '',
             'SeasonType': 'Regular Season',
             'StarterBench': '',
@@ -64,11 +112,65 @@ def get_game_results(date_str):
         games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
         
         # Filter to the specific date
-        target_date = pd.to_datetime(date_str)
         date_games = games_df[games_df['GAME_DATE'] == target_date].copy()
         
         if len(date_games) == 0:
-            print(f"   No games found for {date_str}")
+            print(f"   No completed results found for {date_str} in season {season}.")
+
+            # Look back two weeks to show the latest completed date near target.
+            try:
+                lookback_start = (target_date - timedelta(days=14)).strftime('%m/%d/%Y')
+                lookback_params = {
+                    'Conference': '',
+                    'DateFrom': lookback_start,
+                    'DateTo': date_us,
+                    'Division': '',
+                    'DraftNumber': '',
+                    'DraftRound': '',
+                    'DraftTeamID': '',
+                    'DraftYear': '',
+                    'GameID': '',
+                    'LeagueID': '00',
+                    'Location': '',
+                    'Outcome': '',
+                    'PORound': '',
+                    'PlayerID': '',
+                    'PlayerOrTeam': 'T',
+                    'RookieYear': '',
+                    'Season': season,
+                    'SeasonSegment': '',
+                    'SeasonType': 'Regular Season',
+                    'StarterBench': '',
+                    'TeamID': '',
+                    'VsConference': '',
+                    'VsDivision': '',
+                    'VsTeamID': '',
+                    'YearsExperience': '',
+                }
+                lookback_result = _fetch_nba_stats('leaguegamefinder', lookback_params, timeout=60)
+                lookback_df = _result_set_to_df(lookback_result, index=0)
+                if len(lookback_df) > 0:
+                    lookback_df['GAME_DATE'] = pd.to_datetime(lookback_df['GAME_DATE'])
+                    latest_date = lookback_df['GAME_DATE'].max()
+                    if pd.notna(latest_date):
+                        print(
+                            f"   Latest available completed date in leaguegamefinder ({season}) "
+                            f"near target: {latest_date.strftime('%Y-%m-%d')}"
+                        )
+            except Exception:
+                pass
+
+            scoreboard_status = _get_scoreboard_status(date_str)
+            if scoreboard_status is not None:
+                if scoreboard_status['n_games'] == 0:
+                    print(f"   Scoreboard check: no NBA games scheduled on {date_str}.")
+                elif scoreboard_status['all_final']:
+                    print("   Scoreboard check: games are Final, but leaguegamefinder has not updated yet. Try again shortly.")
+                else:
+                    sample_status = ', '.join(list(scoreboard_status['status_counts'].keys())[:3])
+                    print(f"   Scoreboard check: {scoreboard_status['n_games']} game(s) listed (statuses: {sample_status}).")
+                    print("   Note: scoreboard status text can lag or reflect schedule formatting for historical dates.")
+
             return {}
         
         # Get team info
@@ -85,8 +187,14 @@ def get_game_results(date_str):
                 continue  # Need both teams
             
             # Find home and away teams
-            home_row = game_rows[game_rows['MATCHUP'].str.contains('vs.')].iloc[0]
-            away_row = game_rows[game_rows['MATCHUP'].str.contains('@')].iloc[0]
+            home_rows = game_rows[game_rows['MATCHUP'].str.contains('vs.', na=False)]
+            away_rows = game_rows[game_rows['MATCHUP'].str.contains('@', na=False)]
+
+            if len(home_rows) == 0 or len(away_rows) == 0:
+                continue
+
+            home_row = home_rows.iloc[0]
+            away_row = away_rows.iloc[0]
             
             home_team = all_teams.get(home_row['TEAM_ID'], home_row['TEAM_NAME'])
             away_team = all_teams.get(away_row['TEAM_ID'], away_row['TEAM_NAME'])
