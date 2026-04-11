@@ -52,6 +52,34 @@ python main.py --updateresults --all    # Update all pending
 python main.py --updateresults 2026-01-15  # Specific date
 ```
 
+### 6. Run Web GUI (FastAPI)
+
+```bash
+uvicorn webapp.main:app --host 0.0.0.0 --port 7860
+```
+
+Then open: `http://localhost:7860`
+
+### 7. Run with Docker
+
+```bash
+docker build -t nba-predictor-web .
+docker run --rm -p 7860:7860 nba-predictor-web
+```
+
+Or with Compose:
+
+```bash
+docker compose up --build
+```
+
+### 8. Deploy to Hugging Face Spaces (Docker)
+
+1. Create a new Space with SDK set to `Docker`.
+2. Push this repository to the Space repo.
+3. The included `Dockerfile` serves FastAPI on port `7860` (required by Spaces).
+4. Keep model files and required artifacts in the repo (or pull them from remote storage at startup).
+
 ---
 
 ## 📁 Project Structure

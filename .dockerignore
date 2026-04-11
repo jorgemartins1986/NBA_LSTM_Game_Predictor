@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.git/
+.gitignore
+reports/coverage_html/
+_lstm_experiments/

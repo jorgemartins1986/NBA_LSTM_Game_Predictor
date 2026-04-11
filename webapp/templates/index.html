@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🏀 NBA Predictor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --nba-blue: #17408b;
+      --nba-red: #c9082a;
+      --court-wood: #f0c48f;
+      --court-line: #8d5524;
+      --ink: #0f172a;
+      --muted: #475569;
+      --card: #ffffff;
+      --line: #dbe3ef;
+      --ok: #1f9d55;
+      --err: #d93f3f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Barlow", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1000px 600px at 10% -10%, rgba(23,64,139,0.25), transparent 70%),
+        radial-gradient(1000px 600px at 100% 0%, rgba(201,8,42,0.22), transparent 72%),
+        linear-gradient(160deg, #f8fafc 0%, #eef2ff 100%);
+      min-height: 100vh;
+    }
+    .wrap {
+      width: min(1000px, 94vw);
+      margin: 2rem auto 3rem;
+    }
+    h1 {
+      margin: 0 0 0.6rem;
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-family: "Bebas Neue", sans-serif;
+      color: var(--nba-blue);
+    }
+    p.lead {
+      margin: 0 0 1.5rem;
+      color: var(--muted);
+      max-width: 70ch;
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 1.15rem;
+      box-shadow: 0 18px 36px rgba(15, 23, 42, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 20% -20%, rgba(240,196,143,0.35), transparent 45%),
+        radial-gradient(circle at 100% 0%, rgba(23,64,139,0.08), transparent 35%);
+    }
+    .controls {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 0.8rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    select, button {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 0.72rem 0.9rem;
+      font-size: 1rem;
+      background: #fff;
+      font-family: inherit;
+    }
+    button {
+      background: linear-gradient(135deg, var(--nba-blue), var(--nba-red));
+      color: #fff;
+      border-color: transparent;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button:hover { filter: brightness(1.04); }
+    .stats-link {
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 0.72rem 0.9rem;
+      background: #fff;
+      color: var(--nba-blue);
+      font-weight: 700;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+    .stats-link:hover {
+      transform: translateY(-1px);
+      border-color: var(--nba-blue);
+      box-shadow: 0 8px 18px rgba(23, 64, 139, 0.15);
+    }
+    .legend {
+      position: relative;
+      margin: 0 0 1rem;
+      padding: 0.9rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, rgba(240,196,143,0.2), rgba(255,255,255,0.95));
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .legend p {
+      margin: 0.3rem 0;
+    }
+    .meta {
+      margin: 0.4rem 0 1rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    table {
+      position: relative;
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+      background: #fff;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.62rem;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+    }
+    th {
+      background: linear-gradient(180deg, #eef4ff, #f7faff);
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 0.06em;
+      color: var(--nba-blue);
+    }
+    .tier {
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 0.2rem 0.55rem;
+      display: inline-block;
+    }
+    .tier.EXCELLENT { background: #d3f9d8; color: #2b8a3e; }
+    .tier.STRONG { background: #e3fafc; color: #0b7285; }
+    .tier.GOOD { background: #dbe4ff; color: #364fc7; }
+    .tier.MODERATE { background: #fff3bf; color: #e67700; }
+    .tier.RISKY { background: #ffe8cc; color: #d9480f; }
+    .tier.SKIP { background: #f1f3f5; color: #495057; }
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+    @media (max-width: 800px) {
+      .controls { grid-template-columns: 1fr; }
+      table, thead, tbody, tr, td, th { display: block; }
+      thead { display: none; }
+      tr { border-bottom: 1px solid var(--line); padding: 0.45rem 0; }
+      td { border: 0; padding: 0.2rem 0.1rem; }
+      td::before {
+        content: attr(data-label) ": ";
+        font-weight: 700;
+        color: var(--nba-blue);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>&#127936; NBA Predictor</h1>
+    <p class="lead">Choose a model and run predictions for today.</p>
+
+    <section class="panel">
+      <div class="controls">
+        <select id="model">
+          <option value="ensemble" selected>Ensemble (all models)</option>
+          <option value="xgboost">XGBoost</option>
+          <option value="random_forest">Random Forest</option>
+          <option value="logistic">Logistic Regression</option>
+          <option value="lstm">LSTM</option>
+        </select>
+        <a class="stats-link" href="/stats">Detailed Statistics</a>
+        <button id="runBtn">Run Predictions</button>
+      </div>
+
+      <div class="legend">
+        <p><strong>Confidence</strong>: How far the model is from a 50/50 game. Higher means a stronger pick.</p>
+        <p><strong>Home Win Prob</strong>: Model-estimated chance the home team wins.</p>
+        <p><strong>Model Agreement</strong>: How closely ensemble models agree with each other. Higher means more consensus.</p>
+      </div>
+
+      <div id="status" class="meta">Ready.</div>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const runBtn = document.getElementById("runBtn");
+
+    function pct(v) {
+      return `${(v * 100).toFixed(1)}%`;
+    }
+
+    function renderTable(data) {
+      if (!data.predictions || data.predictions.length === 0) {
+        resultsEl.innerHTML = "<p>No predictions returned.</p>";
+        return;
+      }
+
+      const rows = data.predictions.map((p) => `
+        <tr>
+          <td data-label="Matchup">${p.home_team} vs ${p.away_team}</td>
+          <td data-label="Pick">${p.predicted_winner}</td>
+          <td data-label="Confidence">${pct(p.confidence)}</td>
+          <td data-label="Home Win Prob">${pct(p.home_win_prob)}</td>
+          <td data-label="Model Agreement">${pct(p.model_agreement)}</td>
+          <td data-label="Tier"><span class="tier ${p.tier}">${p.tier}</span></td>
+        </tr>
+      `).join("");
+
+      resultsEl.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Matchup</th>
+              <th>Pick</th>
+              <th>Confidence</th>
+              <th>Home Win Prob</th>
+              <th>Model Agreement</th>
+              <th>Tier</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    runBtn.addEventListener("click", async () => {
+      statusEl.textContent = "Running predictions...";
+      statusEl.className = "meta";
+      resultsEl.innerHTML = "";
+      runBtn.disabled = true;
+
+      const payload = {
+        model: document.getElementById("model").value,
+      };
+
+      try {
+        const res = await fetch("/api/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || "Prediction failed");
+        }
+
+        statusEl.textContent = `Done. ${data.num_games} games on ${data.game_date}.`;
+        statusEl.className = "meta ok";
+        renderTable(data);
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+        statusEl.className = "meta err";
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

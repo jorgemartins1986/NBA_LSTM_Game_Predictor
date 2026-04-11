@@ -10,6 +10,10 @@ joblib
 tqdm
 python-dotenv
 requests
+fastapi
+uvicorn
+jinja2
+python-multipart
 
 # Testing
 pytest>=7.0.0
