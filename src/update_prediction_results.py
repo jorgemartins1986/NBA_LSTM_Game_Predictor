@@ -60,6 +60,66 @@ def _get_scoreboard_status(date_str):
         return None
 
 
+def _get_scoreboard_final_results(date_str):
+    """Fetch winners from ScoreboardV2 final games using line scores.
+
+    This is a fallback when leaguegamefinder has not yet ingested completed games.
+    """
+    try:
+        params = {
+            'DayOffset': '0',
+            'GameDate': date_str,
+            'LeagueID': '00',
+        }
+        result = _fetch_nba_stats('scoreboardv2', params, timeout=60)
+        game_header_df = _result_set_to_df(result, index=0)
+        line_score_df = _result_set_to_df(result, index=1)
+
+        if len(game_header_df) == 0 or len(line_score_df) == 0:
+            return {}
+
+        team_name_by_id = {t['id']: t['full_name'] for t in teams.get_teams()}
+        results = {}
+
+        for _, game in game_header_df.iterrows():
+            status_text = str(game.get('GAME_STATUS_TEXT', ''))
+            if 'Final' not in status_text:
+                continue
+
+            game_id = game['GAME_ID']
+            home_team_id = game['HOME_TEAM_ID']
+            away_team_id = game['VISITOR_TEAM_ID']
+
+            game_lines = line_score_df[line_score_df['GAME_ID'] == game_id]
+            if len(game_lines) < 2:
+                continue
+
+            home_line = game_lines[game_lines['TEAM_ID'] == home_team_id]
+            away_line = game_lines[game_lines['TEAM_ID'] == away_team_id]
+            if len(home_line) == 0 or len(away_line) == 0:
+                continue
+
+            home_pts = pd.to_numeric(home_line.iloc[0].get('PTS'), errors='coerce')
+            away_pts = pd.to_numeric(away_line.iloc[0].get('PTS'), errors='coerce')
+            if pd.isna(home_pts) or pd.isna(away_pts):
+                continue
+
+            if home_pts == away_pts:
+                continue
+
+            winner_team_id = home_team_id if home_pts > away_pts else away_team_id
+            home_team = team_name_by_id.get(home_team_id, str(home_team_id))
+            away_team = team_name_by_id.get(away_team_id, str(away_team_id))
+            winner = team_name_by_id.get(winner_team_id, str(winner_team_id))
+
+            match_key = f"{away_team} vs {home_team}"
+            results[match_key] = winner
+
+        return results
+    except Exception:
+        return {}
+
+
 def get_game_results(date_str):
     """Fetch NBA game results for a specific date
     
@@ -166,6 +226,13 @@ def get_game_results(date_str):
                     print(f"   Scoreboard check: no NBA games scheduled on {date_str}.")
                 elif scoreboard_status['all_final']:
                     print("   Scoreboard check: games are Final, but leaguegamefinder has not updated yet. Try again shortly.")
+
+                    # Fallback: use scoreboard line scores directly for finalized games.
+                    scoreboard_results = _get_scoreboard_final_results(date_str)
+                    if scoreboard_results:
+                        print(f"   Fallback: extracted {len(scoreboard_results)} final result(s) from scoreboard line scores.")
+                        print("   Result source: scoreboardv2 line scores fallback")
+                        return scoreboard_results
                 else:
                     sample_status = ', '.join(list(scoreboard_status['status_counts'].keys())[:3])
                     print(f"   Scoreboard check: {scoreboard_status['n_games']} game(s) listed (statuses: {sample_status}).")
@@ -209,6 +276,22 @@ def get_game_results(date_str):
             match_key = f"{away_team} vs {home_team}"
             results[match_key] = winner
         
+        # Optional safety net: if scoreboard has final games that didn't appear yet in
+        # leaguegamefinder, merge them in to avoid missing late-ingestion rows.
+        source_label = "leaguegamefinder"
+        scoreboard_status = _get_scoreboard_status(date_str)
+        if scoreboard_status is not None and scoreboard_status['any_final']:
+            scoreboard_results = _get_scoreboard_final_results(date_str)
+            if scoreboard_results:
+                base_count = len(results)
+                for k, v in scoreboard_results.items():
+                    results.setdefault(k, v)
+                if len(results) > base_count:
+                    print(f"   Added {len(results) - base_count} result(s) from scoreboard fallback.")
+                    source_label = "leaguegamefinder + scoreboardv2 supplement"
+
+        print(f"   Result source: {source_label}")
+
         return results
         
     except Exception as e:
