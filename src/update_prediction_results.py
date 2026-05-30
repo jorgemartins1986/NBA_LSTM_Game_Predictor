@@ -13,11 +13,13 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from nba_api.stats.static import teams
-from .paths import PREDICTION_HISTORY_FILE
+from .paths import PREDICTION_HISTORY_FILE, GAMES_CACHE_FILE
 from .prediction.nba_data import _fetch_nba_stats, _result_set_to_df, get_current_season
 import os
 import sys
 import time
+import threading
+from concurrent.futures import TimeoutError
 
 
 def _season_from_date(date_str):
@@ -27,15 +29,41 @@ def _season_from_date(date_str):
     return f"{start_year}-{str(start_year + 1)[-2:]}"
 
 
+def _run_with_timeout(func, timeout_sec):
+    """Run a callable with a hard timeout without blocking program exit on timeouts."""
+    result = [None]
+    exc = [None]
+
+    def _worker():
+        try:
+            result[0] = func()
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_worker)
+    t.daemon = True  # Daemon threads don't block Python from exiting
+    t.start()
+    t.join(timeout_sec)
+
+    if t.is_alive():
+        return None
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 def _get_scoreboard_status(date_str):
     """Return lightweight status info for a date from scoreboardv2."""
-    try:
+    if os.getenv('NBA_SKIP_SCOREBOARD') == '1':
+        return None
+
+    def _do_fetch():
         params = {
             'DayOffset': '0',
             'GameDate': date_str,
             'LeagueID': '00',
         }
-        result = _fetch_nba_stats('scoreboardv2', params, timeout=60)
+        result = _fetch_nba_stats('scoreboardv2', params, timeout=15)
         games_df = _result_set_to_df(result, index=0)
 
         if len(games_df) == 0:
@@ -56,6 +84,10 @@ def _get_scoreboard_status(date_str):
             'any_final': bool(is_final.any()),
             'status_counts': status_counts,
         }
+
+    try:
+        result = _run_with_timeout(_do_fetch, 10)
+        return result if result is not None else None
     except Exception:
         return None
 
@@ -65,15 +97,25 @@ def _get_scoreboard_final_results(date_str):
 
     This is a fallback when leaguegamefinder has not yet ingested completed games.
     """
-    try:
+    if os.getenv('NBA_SKIP_SCOREBOARD') == '1':
+        return {}
+
+    def _do_fetch():
         params = {
             'DayOffset': '0',
             'GameDate': date_str,
             'LeagueID': '00',
         }
-        result = _fetch_nba_stats('scoreboardv2', params, timeout=60)
+        result = _fetch_nba_stats('scoreboardv2', params, timeout=15)
         game_header_df = _result_set_to_df(result, index=0)
         line_score_df = _result_set_to_df(result, index=1)
+        return game_header_df, line_score_df
+
+    try:
+        result = _run_with_timeout(_do_fetch, 10)
+        if result is None:
+            return {}
+        game_header_df, line_score_df = result
 
         if len(game_header_df) == 0 or len(line_score_df) == 0:
             return {}
@@ -120,6 +162,132 @@ def _get_scoreboard_final_results(date_str):
         return {}
 
 
+def _fetch_leaguegamefinder_games(season, season_type, date_from_us, date_to_us):
+    """Fetch leaguegamefinder rows for a season type and date range."""
+    if os.getenv('NBA_SKIP_LGF') == '1':
+        return pd.DataFrame()
+    params = {
+        'Conference': '',
+        'DateFrom': date_from_us,
+        'DateTo': date_to_us,
+        'Division': '',
+        'DraftNumber': '',
+        'DraftRound': '',
+        'DraftTeamID': '',
+        'DraftYear': '',
+        'GameID': '',
+        'LeagueID': '00',
+        'Location': '',
+        'Outcome': '',
+        'PORound': '',
+        'PlayerID': '',
+        'PlayerOrTeam': 'T',
+        'RookieYear': '',
+        'Season': season,
+        'SeasonSegment': '',
+        'SeasonType': season_type,
+        'StarterBench': '',
+        'TeamID': '',
+        'VsConference': '',
+        'VsDivision': '',
+        'VsTeamID': '',
+        'YearsExperience': '',
+    }
+    def _try_stats():
+        result = _fetch_nba_stats('leaguegamefinder', params, timeout=20)
+        games_df = _result_set_to_df(result, index=0)
+        if len(games_df) > 0:
+            games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+        return games_df
+
+    def _try_nba_api():
+        timeout_sec = 45 if os.getenv('NBA_SKIP_CACHE') == '1' else 30
+        from nba_api.stats.endpoints import leaguegamefinder
+        gamefinder = leaguegamefinder.LeagueGameFinder(
+            season_nullable=season,
+            league_id_nullable='00',
+            season_type_nullable=season_type,
+            date_from_nullable=date_from_us,
+            date_to_nullable=date_to_us,
+            timeout=timeout_sec,
+        )
+        games_df = gamefinder.get_data_frames()[0]
+        if len(games_df) > 0:
+            games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+        return games_df
+
+    try:
+        result = _run_with_timeout(_try_stats, 10)
+        if result is not None and len(result) > 0:
+            return result
+    except Exception:
+        pass
+        
+    try:
+        result = _try_nba_api()
+        if result is not None and len(result) > 0:
+            return result
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _get_cached_results(date_str):
+    """Fetch results from local cache if available."""
+    if os.getenv('NBA_SKIP_CACHE') == '1':
+        return {}
+    if not os.path.exists(GAMES_CACHE_FILE):
+        return {}
+
+    try:
+        print(f"   Loading cache from {GAMES_CACHE_FILE}...")
+        from collections import defaultdict
+        import csv
+
+        rows_by_game = defaultdict(list)
+        with open(GAMES_CACHE_FILE, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                game_date = (row.get('GAME_DATE') or '')
+                if not game_date.startswith(date_str):
+                    continue
+                rows_by_game[row.get('GAME_ID')].append(row)
+
+        if not rows_by_game:
+            return {}
+
+        all_teams = {t['id']: t['full_name'] for t in teams.get_teams()}
+        results = {}
+        for game_id, game_rows in rows_by_game.items():
+            if len(game_rows) != 2:
+                continue
+            home_rows = [r for r in game_rows if 'vs.' in (r.get('MATCHUP') or '')]
+            away_rows = [r for r in game_rows if '@' in (r.get('MATCHUP') or '')]
+            if not home_rows or not away_rows:
+                continue
+            home_row = home_rows[0]
+            away_row = away_rows[0]
+            try:
+                home_team_id = int(home_row.get('TEAM_ID'))
+            except Exception:
+                home_team_id = None
+            try:
+                away_team_id = int(away_row.get('TEAM_ID'))
+            except Exception:
+                away_team_id = None
+            home_team = all_teams.get(home_team_id, home_row.get('TEAM_NAME'))
+            away_team = all_teams.get(away_team_id, away_row.get('TEAM_NAME'))
+            winner = home_team if home_row.get('WL') == 'W' else away_team
+            match_key = f"{away_team} vs {home_team}"
+            results[match_key] = winner
+
+        if results:
+            print("   Result source: cache (nba_games_cache.csv)")
+        return results
+    except Exception:
+        return {}
+
+
 def get_game_results(date_str):
     """Fetch NBA game results for a specific date
     
@@ -130,6 +298,19 @@ def get_game_results(date_str):
         Dict mapping "Away Team vs Home Team" -> winner team name
     """
     try:
+        # Try cache first to avoid slow or blocked API calls
+        cached_results = _get_cached_results(date_str)
+        if cached_results:
+            return cached_results
+
+        # If leaguegamefinder is skipped, try scoreboard line scores first
+        if os.getenv('NBA_SKIP_LGF') == '1':
+            scoreboard_results = _get_scoreboard_final_results(date_str)
+            if scoreboard_results:
+                print(f"   Fallback: extracted {len(scoreboard_results)} final result(s) from scoreboard line scores.")
+                print("   Result source: scoreboardv2 line scores fallback")
+                return scoreboard_results
+
         season = _season_from_date(date_str)
         current_season = get_current_season()
         target_date = pd.to_datetime(date_str)
@@ -140,77 +321,35 @@ def get_game_results(date_str):
 
         # Fetch only the target date (avoids leaguegamefinder season row caps).
         time.sleep(0.6)  # Rate limiting
-        params = {
-            'Conference': '',
-            'DateFrom': date_us,
-            'DateTo': date_us,
-            'Division': '',
-            'DraftNumber': '',
-            'DraftRound': '',
-            'DraftTeamID': '',
-            'DraftYear': '',
-            'GameID': '',
-            'LeagueID': '00',
-            'Location': '',
-            'Outcome': '',
-            'PORound': '',
-            'PlayerID': '',
-            'PlayerOrTeam': 'T',
-            'RookieYear': '',
-            'Season': season,
-            'SeasonSegment': '',
-            'SeasonType': 'Regular Season',
-            'StarterBench': '',
-            'TeamID': '',
-            'VsConference': '',
-            'VsDivision': '',
-            'VsTeamID': '',
-            'YearsExperience': '',
-        }
-        result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
-        games_df = _result_set_to_df(result, index=0)
-        games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
         
-        # Filter to the specific date
-        date_games = games_df[games_df['GAME_DATE'] == target_date].copy()
+        try:
+            games_df = _fetch_leaguegamefinder_games(season, '', date_us, date_us)
+        except Exception:
+            games_df = pd.DataFrame()
+
+        if len(games_df) > 0:
+            candidate_games = games_df[games_df['GAME_DATE'] == target_date].copy()
+            if len(candidate_games) > 0:
+                date_games = candidate_games
         
         if len(date_games) == 0:
-            print(f"   No completed results found for {date_str} in season {season}.")
+            print(
+                f"   No completed results found for {date_str} in season {season} "
+                f"across {', '.join(season_types_to_try)}."
+            )
 
-            # Look back two weeks to show the latest completed date near target.
+            # Try scoreboard line scores directly, even if status fetch fails.
+            scoreboard_results = _get_scoreboard_final_results(date_str)
+            if scoreboard_results:
+                print(f"   Fallback: extracted {len(scoreboard_results)} final result(s) from scoreboard line scores.")
+                print("   Result source: scoreboardv2 line scores fallback")
+                return scoreboard_results
+
+            # Look back two weeks to show latest completed dates near target.
             try:
                 lookback_start = (target_date - timedelta(days=14)).strftime('%m/%d/%Y')
-                lookback_params = {
-                    'Conference': '',
-                    'DateFrom': lookback_start,
-                    'DateTo': date_us,
-                    'Division': '',
-                    'DraftNumber': '',
-                    'DraftRound': '',
-                    'DraftTeamID': '',
-                    'DraftYear': '',
-                    'GameID': '',
-                    'LeagueID': '00',
-                    'Location': '',
-                    'Outcome': '',
-                    'PORound': '',
-                    'PlayerID': '',
-                    'PlayerOrTeam': 'T',
-                    'RookieYear': '',
-                    'Season': season,
-                    'SeasonSegment': '',
-                    'SeasonType': 'Regular Season',
-                    'StarterBench': '',
-                    'TeamID': '',
-                    'VsConference': '',
-                    'VsDivision': '',
-                    'VsTeamID': '',
-                    'YearsExperience': '',
-                }
-                lookback_result = _fetch_nba_stats('leaguegamefinder', lookback_params, timeout=60)
-                lookback_df = _result_set_to_df(lookback_result, index=0)
+                lookback_df = _fetch_leaguegamefinder_games(season, '', lookback_start, date_us)
                 if len(lookback_df) > 0:
-                    lookback_df['GAME_DATE'] = pd.to_datetime(lookback_df['GAME_DATE'])
                     latest_date = lookback_df['GAME_DATE'].max()
                     if pd.notna(latest_date):
                         print(
@@ -254,7 +393,7 @@ def get_game_results(date_str):
                 continue  # Need both teams
             
             # Find home and away teams
-            home_rows = game_rows[game_rows['MATCHUP'].str.contains('vs.', na=False)]
+            home_rows = game_rows[game_rows['MATCHUP'].str.contains(r'vs\.', na=False)]
             away_rows = game_rows[game_rows['MATCHUP'].str.contains('@', na=False)]
 
             if len(home_rows) == 0 or len(away_rows) == 0:

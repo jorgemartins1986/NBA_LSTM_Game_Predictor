@@ -459,6 +459,12 @@ Examples:
                         help='Show detailed prediction statistics')
     parser.add_argument('--updateresults', nargs='?', const='yesterday', metavar='DATE',
                         help='Update prediction results (default: yesterday, or specify YYYY-MM-DD)')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='Bypass local cache for updateresults and use API only')
+    parser.add_argument('--no-lgf', action='store_true',
+                        help='Skip leaguegamefinder in updateresults and use scoreboard only')
+    parser.add_argument('--date', metavar='DATE',
+                        help='Override game date for predictions (YYYY-MM-DD)')
     parser.add_argument('--all', action='store_true',
                         help='When used with --updateresults, update all pending results')
     
@@ -470,6 +476,10 @@ Examples:
         return
     
     if args.updateresults is not None:
+        if args.no_cache:
+            os.environ['NBA_SKIP_CACHE'] = '1'
+        if args.no_lgf:
+            os.environ['NBA_SKIP_LGF'] = '1'
         if args.all:
             update_results(update_all=True)
         elif args.updateresults == 'yesterday':
@@ -480,7 +490,7 @@ Examples:
     
     if args.command == 'predict':
         from predict import predict_todays_games
-        predict_todays_games()
+        predict_todays_games(date_override=args.date)
         return
     
     if args.command == 'train':

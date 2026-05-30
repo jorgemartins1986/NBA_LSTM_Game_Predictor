@@ -16,6 +16,7 @@ Usage:
 import sys
 import os
 import argparse
+import json
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,7 +75,27 @@ def filter_regular_games(todays_games: list, all_teams: list) -> tuple:
     return regular_games, skipped_games
 
 
-def predict_todays_games(single_model: str = None):
+def parse_manual_games(arg: str):
+    """Parse a manual games JSON string or file path.
+
+    Expected format: a JSON array of game objects with keys at least
+    `home_team_id` and `away_team_id`. Optionally include `game_status` and `game_date`.
+    """
+    if not arg:
+        return None
+    try:
+        # Try parsing as JSON string
+        data = json.loads(arg)
+    except Exception:
+        # Try reading from file
+        with open(arg, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError('Manual games must be a JSON array of game objects')
+    return data
+
+
+def predict_todays_games(single_model: str = None, manual_games: list | None = None, date_override: str | None = None):
     """
     Main prediction function.
     
@@ -120,13 +141,33 @@ def predict_todays_games(single_model: str = None):
     # Create prediction pipeline
     pipeline = PredictionPipeline(ensemble)
     
+    # Ensure game cache is up to date with recent games
+    print("\n🔄 Updating game cache with latest results...")
+    from src.nba_data_manager import NBADataManager
+    data_manager = NBADataManager()
+    data_manager.update_current_season()
+    
     # Fetch recent data
     print("\n📊 Fetching recent team statistics...")
     games_df = fetch_season_games(verbose=True)
     
-    # Get today's games
+    # Get today's games (or use manual override)
     print("\n🏀 Fetching today's games...")
-    todays_games, game_date, all_finished = get_todays_games()
+    if manual_games:
+        todays_games = manual_games
+        # Normalize keys: allow either 'home_team_id' or 'home_id'
+        for g in todays_games:
+            if 'home_id' in g and 'home_team_id' not in g:
+                g['home_team_id'] = g['home_id']
+            if 'away_id' in g and 'away_team_id' not in g:
+                g['away_team_id'] = g['away_id']
+
+        # derive game_date if provided on first game, else use eastern date
+        game_date = manual_games[0].get('game_date') if isinstance(manual_games[0], dict) and manual_games[0].get('game_date') else get_eastern_date()
+        all_finished = False
+        print(f"   Using manual override with {len(todays_games)} game(s)")
+    else:
+        todays_games, game_date, all_finished = get_todays_games(date_str=date_override)
     eastern_today = get_eastern_date()
     print(f"   Game date from API: {game_date}")
     print(f"   Current date (Eastern): {eastern_today}")
@@ -392,6 +433,14 @@ Examples:
         default='ensemble',
         help='Model to use for predictions (default: ensemble)'
     )
+    parser.add_argument(
+        '--manual-games', '-g',
+        help='JSON string or path to JSON file with manual games override (array of game objects)'
+    )
+    parser.add_argument(
+        '--date', '-d',
+        help='Override game date (YYYY-MM-DD) for fetching schedule'
+    )
     
     args = parser.parse_args()
     
@@ -399,11 +448,18 @@ Examples:
     model = args.model
     if model == 'rf':
         model = 'random_forest'
+    manual_games = None
+    if getattr(args, 'manual_games', None):
+        try:
+            manual_games = parse_manual_games(args.manual_games)
+        except Exception as e:
+            print(f"❌ Failed to parse --manual-games: {e}")
+            return
     
     if model == 'ensemble':
-        predict_todays_games()
+        predict_todays_games(manual_games=manual_games, date_override=args.date)
     else:
-        predict_todays_games(single_model=model)
+        predict_todays_games(single_model=model, manual_games=manual_games, date_override=args.date)
 
 
 if __name__ == "__main__":
