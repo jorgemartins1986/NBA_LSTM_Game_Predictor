@@ -505,6 +505,39 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
         # IMPORTANT: NBA API sometimes returns duplicate rows - deduplicate by GAME_ID
         games_df = games_df.drop_duplicates(subset=['GAME_ID'], keep='first')
         
+        # ── Resolve None team IDs from the games cache ──────────────────────
+        # The NBA API sometimes returns None for VISITOR_TEAM_ID or
+        # HOME_TEAM_ID, especially for playoff games whose matchup hadn't
+        # been finalised when the schedule was published.  We can recover
+        # the missing IDs from the local games cache where the data has
+        # already been recorded.
+        _cache_lookup = {}  # game_id -> {home_team_id, away_team_id}
+        needs_fixup = games_df['HOME_TEAM_ID'].isna() | games_df['VISITOR_TEAM_ID'].isna()
+        if needs_fixup.any() and os.path.exists(GAMES_CACHE_FILE):
+            try:
+                _cache_df = pd.read_csv(GAMES_CACHE_FILE)
+                # Normalise GAME_ID to string WITHOUT leading zeros for matching
+                # API returns '0042500403' but cache stores int 42500403
+                _cache_df['GAME_ID'] = _cache_df['GAME_ID'].astype(str).str.lstrip('0')
+                for gid in games_df.loc[needs_fixup, 'GAME_ID'].unique():
+                    gid_stripped = str(gid).lstrip('0')
+                    matched = _cache_df[_cache_df['GAME_ID'] == gid_stripped]
+                    if len(matched) >= 2:
+                        # Determine home/away from MATCHUP column ("vs." = home, "@" = away)
+                        home_rows = matched[matched['MATCHUP'].str.contains(' vs. ', na=False)]
+                        away_rows = matched[matched['MATCHUP'].str.contains(' @ ', na=False)]
+                        h_id = int(home_rows.iloc[0]['TEAM_ID']) if len(home_rows) > 0 else None
+                        a_id = int(away_rows.iloc[0]['TEAM_ID']) if len(away_rows) > 0 else None
+                        _cache_lookup[gid] = {'home_team_id': h_id, 'away_team_id': a_id}
+                    elif len(matched) == 1:
+                        _cache_lookup[gid] = {'home_team_id': int(matched.iloc[0]['TEAM_ID']),
+                                              'away_team_id': None}
+                if _cache_lookup and verbose:
+                    print(f"   ✓ Resolved {len(_cache_lookup)} game(s) with missing team IDs from cache")
+            except Exception as cache_err:
+                if verbose:
+                    print(f"   ⚠ Cache lookup for missing team IDs failed: {cache_err}")
+
         # Try to get live status from live scoreboard
         live_status = {}
         try:
@@ -525,6 +558,30 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
             game_id = row['GAME_ID']
             home_team_id = row['HOME_TEAM_ID']
             visitor_team_id = row['VISITOR_TEAM_ID']
+            
+            # Fill in None IDs from cache if available
+            if pd.isna(home_team_id) or home_team_id is None:
+                cached = _cache_lookup.get(game_id, {})
+                if cached.get('home_team_id'):
+                    home_team_id = cached['home_team_id']
+                    if verbose:
+                        print(f"   ✓ Resolved home team ID {home_team_id} for game {game_id} from cache")
+            if pd.isna(visitor_team_id) or visitor_team_id is None:
+                cached = _cache_lookup.get(game_id, {})
+                if cached.get('away_team_id'):
+                    visitor_team_id = cached['away_team_id']
+                    if verbose:
+                        print(f"   ✓ Resolved away team ID {visitor_team_id} for game {game_id} from cache")
+            
+            # Ensure IDs are ints (not float/NaN)
+            try:
+                home_team_id = int(home_team_id) if home_team_id is not None and not pd.isna(home_team_id) else None
+            except (ValueError, TypeError):
+                home_team_id = None
+            try:
+                visitor_team_id = int(visitor_team_id) if visitor_team_id is not None and not pd.isna(visitor_team_id) else None
+            except (ValueError, TypeError):
+                visitor_team_id = None
             
             home_info = team_id_to_info.get(home_team_id, {})
             visitor_info = team_id_to_info.get(visitor_team_id, {})
