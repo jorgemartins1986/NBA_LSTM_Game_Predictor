@@ -166,9 +166,10 @@ Use your basketball knowledge alongside the predictions!
 - Use manual prediction instead
 
 ### "Not enough data for prediction"
-- Team is new/relocated
-- Not enough games played this season
-- Wait until more games are played
+- At least one team has no records in the active season; 20 games is the rolling window, not a minimum.
+- Update `current_season` in `config/season.json` (currently `2026-27`), or use `null` for automatic October rollover.
+- Set `include_preseason` in `config/season.json` to `true` or `false`. Cached data and both API paths honor it; the cache retains all game types for later toggling.
+- Each team needs 1 record to attempt prediction, 6 records for most rolling means/stds, and 21 for the full 20-game window. Rolling statistics exclude the latest row; missing statistics are filled with zeros.
 
 ### Still getting low accuracy?
 Try these improvements:

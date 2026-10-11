@@ -304,6 +304,10 @@ class TestGetTodaysGames:
 class TestFetchSeasonGames:
     """Tests for fetch_season_games with mocked NBA API"""
 
+    @pytest.fixture(autouse=True)
+    def bypass_local_cache(self, monkeypatch):
+        monkeypatch.setenv('NBA_FORCE_FETCH', '1')
+
     @patch('time.sleep')
     @patch('src.prediction.nba_data._fetch_nba_stats')
     def test_returns_sorted_dataframe(self, mock_fetch, _sleep):
@@ -329,6 +333,18 @@ class TestFetchSeasonGames:
 
         call_args = mock_fetch.call_args
         assert call_args[0][1]['Season'] == get_current_season()
+        assert call_args[0][1]['SeasonType'] == ''
+
+    @patch('time.sleep')
+    @patch('nba_api.stats.endpoints.leaguegamefinder.LeagueGameFinder')
+    @patch('src.prediction.nba_data._fetch_nba_stats', side_effect=TimeoutError)
+    def test_fallback_includes_preseason(self, mock_fetch, mock_finder, _sleep):
+        df = pd.DataFrame({'GAME_DATE': ['2026-10-05'], 'PTS': [100]})
+        mock_finder.return_value.get_data_frames.return_value = [df]
+        result = fetch_season_games(season='2026-27', verbose=False)
+        assert len(result) == 1
+        assert mock_finder.call_args.kwargs['season_nullable'] == '2026-27'
+        assert mock_finder.call_args.kwargs['season_type_nullable'] == ''
 
     @patch('time.sleep')
     @patch('src.prediction.nba_data._fetch_nba_stats')
@@ -357,6 +373,7 @@ class TestGetCurrentSeasonBranch:
         mock_now.year = 2025
         mock_dt.now.return_value = mock_now
 
-        result = get_current_season()
+        with patch('src.prediction.nba_data.get_configured_season', return_value=None):
+            result = get_current_season()
 
         assert result == '2025-26'

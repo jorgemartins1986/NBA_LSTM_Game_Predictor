@@ -19,6 +19,7 @@ import os
 import pickle
 from tqdm import tqdm
 from .paths import GAMES_CACHE_FILE, ELO_CACHE_FILE
+from .season_config import get_current_season
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.static import teams
 
@@ -164,13 +165,16 @@ class NBADataManager:
         print(f"✓ Loaded {len(df)} cached records")
         return df
     
-    def update_current_season(self, current_season='2025-26'):
+    def update_current_season(self, current_season=None):
         """Fetch only the current season's games and append to cache"""
+        if current_season is None:
+            current_season = get_current_season()
         print(f"\n🔄 Updating {current_season} season...")
         
         try:
             gamefinder = leaguegamefinder.LeagueGameFinder(
                 season_nullable=current_season,
+                season_type_nullable='',
                 league_id_nullable='00'
             )
             new_games = gamefinder.get_data_frames()[0]

@@ -21,6 +21,7 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 from ..paths import GAMES_CACHE_FILE
+from ..season_config import get_configured_season, include_preseason, filter_prediction_games
 
 
 # Headers that stats.nba.com requires (Akamai CDN fingerprinting)
@@ -223,6 +224,9 @@ def get_eastern_date() -> str:
 
 def get_current_season() -> str:
     """Get current NBA season string (e.g., '2024-25')"""
+    configured = get_configured_season()
+    if configured is not None:
+        return configured
     eastern = ZoneInfo('America/New_York')
     now = datetime.now(eastern)
     # NBA season starts in October
@@ -643,7 +647,7 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
 
 
 def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame:
-    """Fetch all games for a season.
+    """Fetch season games, including preseason when enabled in season.json.
     
     Uses urllib directly to bypass CDN blocking of requests/urllib3.
     Falls back to nba_api if urllib fails.
@@ -659,6 +663,8 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
     
     if season is None:
         season = get_current_season()
+
+    preseason_enabled = include_preseason()
     
     if verbose:
         print(f"📊 Fetching games for {season} season...")
@@ -671,6 +677,7 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
                 cached_df['GAME_DATE'] = pd.to_datetime(cached_df['GAME_DATE'])
             if 'SEASON' in cached_df.columns:
                 cached_df = cached_df[cached_df['SEASON'] == season]
+            cached_df = filter_prediction_games(cached_df, preseason_enabled)
             cached_df = cached_df.sort_values('GAME_DATE')
             if len(cached_df) > 0:
                 if verbose:
@@ -701,7 +708,7 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
             'RookieYear': '',
             'Season': season,
             'SeasonSegment': '',
-            'SeasonType': 'Regular Season',
+            'SeasonType': '',  # Match cache/fallback: include preseason and postseason.
             'StarterBench': '',
             'TeamID': '',
             'VsConference': '',
@@ -711,6 +718,7 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
         }
         result = _fetch_nba_stats('leaguegamefinder', params, timeout=60)
         games_df = _result_set_to_df(result, index=0)
+        games_df = filter_prediction_games(games_df, preseason_enabled)
         games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
         games_df = games_df.sort_values('GAME_DATE')
         
@@ -728,10 +736,12 @@ def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame
             time.sleep(1)
             gamefinder = leaguegamefinder.LeagueGameFinder(
                 season_nullable=season,
+                season_type_nullable='',
                 league_id_nullable='00',
                 timeout=120
             )
             games_df = gamefinder.get_data_frames()[0]
+            games_df = filter_prediction_games(games_df, preseason_enabled)
             games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
             games_df = games_df.sort_values('GAME_DATE')
             if verbose:

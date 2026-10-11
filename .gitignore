@@ -30,6 +30,7 @@ models/
 *.pkl
 *.json
 !config/best_xgb_params.json
+!config/season.json
 
 # Reports (generated during training)
 reports/
