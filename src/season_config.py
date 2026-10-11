@@ -36,6 +36,14 @@ def include_preseason():
     return enabled
 
 
+def use_previous_season():
+    """Opt into previous-season statistics for early-season predictions."""
+    enabled = _read_config().get('use_previous_season', False)
+    if not isinstance(enabled, bool):
+        raise ValueError('config/season.json: use_previous_season must be true or false')
+    return enabled
+
+
 def filter_prediction_games(games_df, preseason_enabled):
     """Filter all input sources equally; retain postseason when preseason is off."""
     if preseason_enabled or games_df.empty:

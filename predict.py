@@ -22,6 +22,8 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nba_api.stats.static import teams
+from src.prediction.rolling_history import load_prediction_history, upcoming_team_stats
+from src.prediction.nba_data import get_current_season
 
 from src.prediction import (
     ModelLoader,
@@ -31,7 +33,6 @@ from src.prediction import (
     get_eastern_date,
     get_live_standings,
     fetch_season_games,
-    get_recent_team_stats,
     compute_head_to_head,
     get_default_standings,
     get_live_odds,
@@ -185,6 +186,12 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
     
     print(f"✓ Found {len(todays_games)} games for {game_date}")
     
+    active_season = get_current_season()
+    history_df = load_prediction_history(games_df, active_season)
+    # Restrict H2H to current-season games strictly before the prediction date.
+    import pandas as pd
+    games_df = games_df[pd.to_datetime(games_df['GAME_DATE']) < pd.Timestamp(game_date)]
+
     # Fetch live standings
     live_standings = get_live_standings()
     
@@ -222,13 +229,19 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
         print(f"   Status: {game['game_status']}")
         
         # Get recent stats
-        home_features = get_recent_team_stats(game['home_team_id'], games_df)
-        away_features = get_recent_team_stats(game['away_team_id'], games_df)
+        home_features = upcoming_team_stats(game['home_team_id'], history_df,
+                                            active_season, game_date, True)
+        away_features = upcoming_team_stats(game['away_team_id'], history_df,
+                                            active_season, game_date, False)
         
         if home_features is None or away_features is None:
             print("   ⚠️  Not enough data for prediction")
             continue
         
+        for label, stats in [('Home', home_features), ('Away', away_features)]:
+            print(f"   {label} rolling history: {stats['HISTORY_CURRENT_GAMES']} current-season"
+                  f" + {stats['HISTORY_PREVIOUS_GAMES']} previous-season games")
+
         # Compute head-to-head
         h2h_home = compute_head_to_head(games_df, game['home_team_id'], game['away_team_id'])
         h2h_away = compute_head_to_head(games_df, game['away_team_id'], game['home_team_id'])

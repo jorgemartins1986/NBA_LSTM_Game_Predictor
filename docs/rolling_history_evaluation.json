@@ -1,0 +1,198 @@
+[
+  {
+    "preseason_included": true,
+    "evaluation_seasons": [
+      "2022-23",
+      "2023-24",
+      "2024-25",
+      "2025-26"
+    ],
+    "method": "Expanding chronological training, identical logistic baseline; first 20 regular-season games per team; date-cluster bootstrap.",
+    "current_only": {
+      "games": 1163,
+      "accuracy": 0.6251074806534824,
+      "brier": 0.238695819036597,
+      "log_loss": 0.7385255535278671
+    },
+    "carry_previous": {
+      "games": 1163,
+      "accuracy": 0.6294067067927773,
+      "brier": 0.2254648065352238,
+      "log_loss": 0.6424570005044438
+    },
+    "common_games_current_only": {
+      "games": 1163,
+      "accuracy": 0.6251074806534824,
+      "brier": 0.238695819036597,
+      "log_loss": 0.7385255535278671
+    },
+    "common_games_carry_previous": {
+      "games": 1163,
+      "accuracy": 0.6294067067927773,
+      "brier": 0.2254648065352238,
+      "log_loss": 0.6424570005044438
+    },
+    "paired_brier_delta_carry_minus_current": -0.013231012501373134,
+    "paired_brier_delta_95pct_ci": [
+      -0.024525282911858445,
+      -0.0029617461259659615
+    ],
+    "per_season_common_games": {
+      "2022-23": {
+        "current_only": {
+          "games": 292,
+          "accuracy": 0.5958904109589042,
+          "brier": 0.25731663761966256,
+          "log_loss": 0.7716156518349189
+        },
+        "carry_previous": {
+          "games": 292,
+          "accuracy": 0.565068493150685,
+          "brier": 0.24414163188454008,
+          "log_loss": 0.6837341146877707
+        }
+      },
+      "2023-24": {
+        "current_only": {
+          "games": 293,
+          "accuracy": 0.6279863481228669,
+          "brier": 0.23641820147855605,
+          "log_loss": 0.7310767483199241
+        },
+        "carry_previous": {
+          "games": 293,
+          "accuracy": 0.6348122866894198,
+          "brier": 0.22185334488167296,
+          "log_loss": 0.6358287779817648
+        }
+      },
+      "2024-25": {
+        "current_only": {
+          "games": 288,
+          "accuracy": 0.625,
+          "brier": 0.23949862483220916,
+          "log_loss": 0.7985748932061958
+        },
+        "carry_previous": {
+          "games": 288,
+          "accuracy": 0.6493055555555556,
+          "brier": 0.21908713592767703,
+          "log_loss": 0.6272114058980026
+        }
+      },
+      "2025-26": {
+        "current_only": {
+          "games": 290,
+          "accuracy": 0.6517241379310345,
+          "brier": 0.22145049093009542,
+          "log_loss": 0.6530979031585898
+        },
+        "carry_previous": {
+          "games": 290,
+          "accuracy": 0.6689655172413793,
+          "brier": 0.2166416837678567,
+          "log_loss": 0.62273245948468
+        }
+      }
+    },
+    "limitation": "Independent baseline, not the production ensemble; no historical odds or ROI evaluation. Feature/result cutoff is chronological; team roster changes are not modeled."
+  },
+  {
+    "preseason_included": false,
+    "evaluation_seasons": [
+      "2022-23",
+      "2023-24",
+      "2024-25",
+      "2025-26"
+    ],
+    "method": "Expanding chronological training, identical logistic baseline; first 20 regular-season games per team; date-cluster bootstrap.",
+    "current_only": {
+      "games": 1100,
+      "accuracy": 0.6345454545454545,
+      "brier": 0.2599166289946229,
+      "log_loss": 0.8526150587028279
+    },
+    "carry_previous": {
+      "games": 1163,
+      "accuracy": 0.649183147033534,
+      "brier": 0.22299862864381248,
+      "log_loss": 0.6374534534930754
+    },
+    "common_games_current_only": {
+      "games": 1100,
+      "accuracy": 0.6345454545454545,
+      "brier": 0.2599166289946229,
+      "log_loss": 0.8526150587028279
+    },
+    "common_games_carry_previous": {
+      "games": 1100,
+      "accuracy": 0.6536363636363637,
+      "brier": 0.2212140012251188,
+      "log_loss": 0.6334941788963235
+    },
+    "paired_brier_delta_carry_minus_current": -0.038702627769504075,
+    "paired_brier_delta_95pct_ci": [
+      -0.05914757965877235,
+      -0.02004620406124021
+    ],
+    "per_season_common_games": {
+      "2022-23": {
+        "current_only": {
+          "games": 276,
+          "accuracy": 0.6231884057971014,
+          "brier": 0.2636974159415179,
+          "log_loss": 0.8223747372675432
+        },
+        "carry_previous": {
+          "games": 276,
+          "accuracy": 0.605072463768116,
+          "brier": 0.23342955891601538,
+          "log_loss": 0.6604879136993601
+        }
+      },
+      "2023-24": {
+        "current_only": {
+          "games": 278,
+          "accuracy": 0.6223021582733813,
+          "brier": 0.2758109443670026,
+          "log_loss": 0.9645483918464733
+        },
+        "carry_previous": {
+          "games": 278,
+          "accuracy": 0.6798561151079137,
+          "brier": 0.21687924885377768,
+          "log_loss": 0.6252044292599199
+        }
+      },
+      "2024-25": {
+        "current_only": {
+          "games": 272,
+          "accuracy": 0.625,
+          "brier": 0.266255330959945,
+          "log_loss": 0.9141542009615119
+        },
+        "carry_previous": {
+          "games": 272,
+          "accuracy": 0.6323529411764706,
+          "brier": 0.22778778498120483,
+          "log_loss": 0.648163890903299
+        }
+      },
+      "2025-26": {
+        "current_only": {
+          "games": 274,
+          "accuracy": 0.6678832116788321,
+          "brier": 0.23368946182151262,
+          "log_loss": 0.7084187645708682
+        },
+        "carry_previous": {
+          "games": 274,
+          "accuracy": 0.6970802919708029,
+          "brier": 0.2067815123743523,
+          "log_loss": 0.6001515435948085
+        }
+      }
+    },
+    "limitation": "Independent baseline, not the production ensemble; no historical odds or ROI evaluation. Feature/result cutoff is chronological; team roster changes are not modeled."
+  }
+]

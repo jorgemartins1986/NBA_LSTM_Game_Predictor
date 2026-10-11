@@ -31,6 +31,7 @@ models/
 *.json
 !config/best_xgb_params.json
 !config/season.json
+!docs/rolling_history_evaluation.json
 
 # Reports (generated during training)
 reports/

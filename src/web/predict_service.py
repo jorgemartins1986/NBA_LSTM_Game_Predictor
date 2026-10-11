@@ -4,6 +4,9 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 
 from nba_api.stats.static import teams
+import pandas as pd
+from src.prediction.rolling_history import load_prediction_history, upcoming_team_stats
+from src.prediction.nba_data import get_current_season
 
 from src.prediction import (
     ModelLoader,
@@ -13,7 +16,6 @@ from src.prediction import (
     get_live_odds,
     get_live_standings,
     get_todays_games,
-    get_recent_team_stats,
     compute_head_to_head,
     match_game_to_odds,
     get_confidence_tier,
@@ -75,6 +77,9 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
             "skipped_reason": "No games found for today.",
         }
 
+    active_season = get_current_season()
+    history_df = load_prediction_history(games_df, active_season, verbose=False)
+    games_df = games_df[pd.to_datetime(games_df['GAME_DATE']) < pd.Timestamp(game_date)]
     live_standings = get_live_standings(verbose=False)
     live_odds = get_live_odds(verbose=False)
 
@@ -87,8 +92,10 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
         if not home_team or not away_team:
             continue
 
-        home_features = get_recent_team_stats(game["home_team_id"], games_df)
-        away_features = get_recent_team_stats(game["away_team_id"], games_df)
+        home_features = upcoming_team_stats(game['home_team_id'], history_df,
+                                            active_season, game_date, True)
+        away_features = upcoming_team_stats(game['away_team_id'], history_df,
+                                            active_season, game_date, False)
         if home_features is None or away_features is None:
             continue
 
@@ -128,6 +135,13 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
                 "away_win_prob": round(float(result.away_win_probability), 4),
                 "model_agreement": round(float(result.model_agreement), 4),
                 "game_status": game.get("game_status", "Scheduled"),
+                "history": {
+                    side: {
+                        "current_season_games": stats['HISTORY_CURRENT_GAMES'],
+                        "previous_season_games": stats['HISTORY_PREVIOUS_GAMES'],
+                    }
+                    for side, stats in [('home', home_features), ('away', away_features)]
+                },
             }
         )
 

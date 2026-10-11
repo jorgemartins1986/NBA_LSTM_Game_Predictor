@@ -75,3 +75,15 @@ def test_preseason_flag_requires_boolean(tmp_path, monkeypatch):
     monkeypatch.setattr(season_config, 'get_config_path', lambda _: str(config))
     with pytest.raises(ValueError, match='include_preseason'):
         season_config.include_preseason()
+
+
+@pytest.mark.parametrize('value', [True, False, 'false'])
+def test_previous_season_flag(tmp_path, monkeypatch, value):
+    config = tmp_path / 'season.json'
+    config.write_text(json.dumps({'use_previous_season': value}), encoding='utf-8')
+    monkeypatch.setattr(season_config, 'get_config_path', lambda _: str(config))
+    if isinstance(value, bool):
+        assert season_config.use_previous_season() is value
+    else:
+        with pytest.raises(ValueError, match='use_previous_season'):
+            season_config.use_previous_season()
