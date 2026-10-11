@@ -1,4 +1,5 @@
 {
   "current_season": "2026-27",
-  "include_preseason": true
+  "include_preseason": true,
+  "use_previous_season": true
 }

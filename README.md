@@ -473,7 +473,8 @@ The `--stats` command shows comprehensive breakdown:
 - At least one team has no game records in the active season. The 20-game window is not a minimum requirement.
 - Set the active season in `config/season.json`, for example `{"current_season": "2026-27"}`. Prediction, live standings, and cache updates share this setting. Set it to `null` for automatic October rollover.
 - Set `"include_preseason": true` in `config/season.json` to include preseason in recent statistics, or `false` to exclude it. The flag applies to cached data and both API paths; postseason remains included. The cache stores all game types so the flag can be switched without deleting data.
-- Each team needs at least one record to attempt prediction. Most rolling means/stds need 6 records (5 preceding the latest row); the full 20-game window needs 21, because statistics exclude the latest row. Sparse early-season statistics may be missing and replaced with zeros.
+- Set `"use_previous_season": true` to fill each team's 20-game statistical window with its latest games from the immediately previous season. Set it to `false` for current-season inputs only. Preseason filtering applies to both seasons. Streaks, recent form, standings, and fatigue reset for the current season; head-to-head uses current-season history only.
+- Upcoming-game statistics use only completed games strictly before the prediction date, including the most recently completed game. At least 1 eligible game per team permits prediction; 5 provide most rolling averages/stds, and 20 fill the window. Missing statistics are still filled with zeros. CLI output and the web API report the window's current/previous-season counts.
 
 ### Module import errors
 ```bash

@@ -169,7 +169,8 @@ Use your basketball knowledge alongside the predictions!
 - At least one team has no records in the active season; 20 games is the rolling window, not a minimum.
 - Update `current_season` in `config/season.json` (currently `2026-27`), or use `null` for automatic October rollover.
 - Set `include_preseason` in `config/season.json` to `true` or `false`. Cached data and both API paths honor it; the cache retains all game types for later toggling.
-- Each team needs 1 record to attempt prediction, 6 records for most rolling means/stds, and 21 for the full 20-game window. Rolling statistics exclude the latest row; missing statistics are filled with zeros.
+- Enable `use_previous_season` in `config/season.json` to fill the rolling window from the immediately previous season. Old games are replaced as new results arrive; season form and fatigue reset, and standings/H2H stay current-season only.
+- Upcoming-game features include the newest completed result, strictly before the prediction date. Each team needs 1 eligible game to attempt prediction, 5 for most rolling averages/stds, and 20 for the full window. Missing statistics are filled with zeros. The CLI/web API report history counts.
 
 ### Still getting low accuracy?
 Try these improvements:
