@@ -1,8 +1,10 @@
 # Previous-season rolling history evaluation
 
 The previous-season fallback improves probability estimates in an independent
-chronological baseline and is retained as a configurable prediction option.
-It is not a validation of the saved production ensemble or betting returns.
+chronological baseline. That finding does not verify improved accuracy for the
+saved production ensemble. A subsequent direct comparison found mixed results;
+see [the saved-ensemble evaluation](SAVED_ENSEMBLE_HISTORY_EVALUATION.md).
+The option remains experimental, not a validated betting improvement.
 
 ## Implementation
 
@@ -52,12 +54,12 @@ by the current-only policy (1,163 versus 1,100 predictions).
 
 ## Merge decision and limits
 
-The comparison supports merging the implementation as a reversible configuration
-option: aggregate probability error improves with both preseason settings,
-aggregate winner accuracy increases, and data availability improves. The saved
-four-model ensemble also passes an offline compatibility smoke check with 112
-finite features and valid probabilities, including a regular-season opener with
-zero current-season results when preseason is excluded.
+The implementation was merged based on the independent baseline comparison and
+a compatibility smoke check. Those checks were insufficient to claim improved
+production-ensemble accuracy. The saved four-model ensemble accepts 112 finite
+features and produces valid probabilities, including a regular-season opener with
+zero current-season results when preseason is excluded; compatibility alone is
+not evidence of prediction quality.
 
 Saved ensemble artifacts have no auditable training cutoff, so their historical
 accuracy cannot be treated as an honest holdout result. The measured percentages
