@@ -150,10 +150,19 @@ class TestGetLiveStandings:
 class TestGetTodaysGames:
     """Tests for get_todays_games with mocked NBA API"""
 
+    @pytest.fixture(autouse=True)
+    def isolate_fallbacks(self):
+        # ScoreboardV2 is the primary stats path. Keep the CDN and league
+        # fallbacks offline so fixtures cannot be replaced by real NBA data.
+        with patch('src.prediction.nba_data._fetch_cdn_scoreboard', return_value=[]), \
+                patch('nba_api.stats.endpoints.leaguegamefinder.LeagueGameFinder') as finder:
+            finder.return_value.get_data_frames.return_value = [pd.DataFrame()]
+            yield
+
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_parses_games(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
         mock_teams.return_value = [
@@ -166,7 +175,7 @@ class TestGetTodaysGames:
             'VISITOR_TEAM_ID': [200],
             'GAME_STATUS_TEXT': ['7:00 PM ET'],
         })
-        mock_fetch.return_value = _df_to_api_result(games_df)
+        mock_fetch.return_value.get_data_frames.return_value = [games_df]
         mock_live.side_effect = Exception("no live data")
 
         games, date_str, all_finished = get_todays_games(verbose=False)
@@ -181,10 +190,10 @@ class TestGetTodaysGames:
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams', return_value=[])
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_empty_schedule(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
-        mock_fetch.return_value = _df_to_api_result(pd.DataFrame())
+        mock_fetch.return_value.get_data_frames.return_value = [pd.DataFrame()]
         mock_live.side_effect = Exception("no live")
 
         games, date_str, all_finished = get_todays_games(verbose=False)
@@ -195,7 +204,7 @@ class TestGetTodaysGames:
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_deduplicates_games(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
         mock_teams.return_value = [{'id': 1, 'nickname': 'A'}, {'id': 2, 'nickname': 'B'}]
@@ -205,7 +214,7 @@ class TestGetTodaysGames:
             'VISITOR_TEAM_ID': [2, 2],
             'GAME_STATUS_TEXT': ['Scheduled', 'Scheduled'],
         })
-        mock_fetch.return_value = _df_to_api_result(dup_df)
+        mock_fetch.return_value.get_data_frames.return_value = [dup_df]
         mock_live.side_effect = Exception("no live")
 
         games, _, _ = get_todays_games(verbose=False)
@@ -215,7 +224,7 @@ class TestGetTodaysGames:
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_all_finished(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
         mock_teams.return_value = [{'id': 1, 'nickname': 'A'}, {'id': 2, 'nickname': 'B'}]
@@ -225,7 +234,7 @@ class TestGetTodaysGames:
             'VISITOR_TEAM_ID': [2],
             'GAME_STATUS_TEXT': ['Final'],
         })
-        mock_fetch.return_value = _df_to_api_result(df)
+        mock_fetch.return_value.get_data_frames.return_value = [df]
         mock_live.side_effect = Exception("no live")
 
         _, _, all_finished = get_todays_games(verbose=False)
@@ -235,7 +244,7 @@ class TestGetTodaysGames:
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_live_status_overlay(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
         mock_teams.return_value = [{'id': 1, 'nickname': 'A'}, {'id': 2, 'nickname': 'B'}]
@@ -245,7 +254,7 @@ class TestGetTodaysGames:
             'VISITOR_TEAM_ID': [2],
             'GAME_STATUS_TEXT': ['Scheduled'],
         })
-        mock_fetch.return_value = _df_to_api_result(df)
+        mock_fetch.return_value.get_data_frames.return_value = [df]
 
         mock_board = MagicMock()
         mock_board.get_dict.return_value = {
@@ -264,9 +273,7 @@ class TestGetTodaysGames:
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams', return_value=[])
     @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
-    def test_api_failure_returns_empty(self, mock_fetch, mock_sb, mock_teams, mock_date, _sleep):
-        mock_fetch.side_effect = Exception("API failure")
+    def test_api_failure_returns_empty(self, mock_sb, mock_teams, mock_date, _sleep):
         mock_sb.side_effect = Exception("API failure")
 
         games, date_str, all_finished = get_todays_games(verbose=False)
@@ -278,7 +285,7 @@ class TestGetTodaysGames:
     @patch('time.sleep')
     @patch('src.prediction.nba_data.get_eastern_date', return_value='2026-02-13')
     @patch('nba_api.stats.static.teams.get_teams')
-    @patch('src.prediction.nba_data._fetch_nba_stats')
+    @patch('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2')
     @patch('nba_api.live.nba.endpoints.scoreboard.ScoreBoard')
     def test_unknown_team_id_uses_fallback(self, mock_live, mock_fetch, mock_teams, mock_date, _sleep):
         mock_teams.return_value = [{'id': 1, 'nickname': 'A'}]
@@ -288,7 +295,7 @@ class TestGetTodaysGames:
             'VISITOR_TEAM_ID': [9999],
             'GAME_STATUS_TEXT': ['Scheduled'],
         })
-        mock_fetch.return_value = _df_to_api_result(df)
+        mock_fetch.return_value.get_data_frames.return_value = [df]
         mock_live.side_effect = Exception("no live")
 
         games, _, _ = get_todays_games(verbose=False)

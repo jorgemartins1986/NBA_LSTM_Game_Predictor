@@ -24,7 +24,7 @@ show_missing = true
 skip_covered = false
 # Refactored code coverage target 
 # Core modules (training/, prediction/) are now fully unit-testable
-fail_under = 80
+fail_under = 85
 
 [html]
 directory = reports/coverage_html

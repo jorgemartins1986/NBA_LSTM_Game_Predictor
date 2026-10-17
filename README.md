@@ -44,6 +44,18 @@ python main.py --stats
 python main.py train
 ```
 
+Feature preparation runs in worker processes without loading TensorFlow in each
+worker. TensorFlow informational startup messages are hidden by default; warnings
+and errors remain visible. To show startup details in PowerShell, set
+`$env:TF_CPP_MIN_LOG_LEVEL = "0"` before running the command. oneDNN optimizations
+remain enabled.
+
+Feature and matchup caches record the pandas/NumPy versions and rolling-window
+size. Old or incompatible caches rebuild automatically from the raw game history
+with a short `Rebuilding ...` message. Expect one rebuild after this update;
+later runs reuse compatible caches. Cache writes replace the previous file only
+after the new file has been written successfully.
+
 ### 5. Update Results After Games
 
 ```bash
@@ -181,7 +193,7 @@ NBA_LSTM_Game_Predictor/
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **440 tests** covering core functionality at **87% coverage**.
+The test suite has **502 passing tests** and **88.11% line coverage** in the configured core-module scope. Coverage runs enforce an **85% minimum**.
 
 ### Run Tests
 
@@ -210,16 +222,27 @@ pytest --cov=src --cov-report=html
 | `paths.py` | 100% | Fully covered |
 | `training/data_prep.py` | 100% | Data preparation |
 | `prediction/pipeline.py` | 100% | Prediction pipeline |
-| `prediction/features.py` | 88% | Feature computation |
-| `prediction/nba_data.py` | 85% | NBA API data fetching |
+| `prediction/features.py` | 91% | Feature computation |
+| `prediction/nba_data.py` | 87% | NBA API data fetching |
 | `training/ensemble.py` | 81% | Ensemble coordinator + stacking |
 | `prediction/loader.py` | 85% | Model loading |
-| `training/evaluation.py` | 84% | Model evaluation |
+| `training/evaluation.py` | 97% | Model evaluation |
 | `training/trainers.py` | 84% | Model trainers |
-| `nba_data_manager.py` | 82% | Core ELO system |
-| `odds_api.py` | 79% | Odds features & enricher |
+| `nba_data_manager.py` | 83% | Core ELO system |
+| `odds_api.py` | 82% | Odds features & enricher |
+| `feature_engineering.py` | 100% | Rolling feature calculations |
+| `dataframe_cache.py` | 96% | Cache compatibility and recovery |
 
-**Total Coverage: 87%** (target: 80%)
+**Total Coverage: 88.11%** (required minimum: 85%).
+
+The existing `.coveragerc` scope excludes package initializers, the legacy
+`nba_predictor.py` and `update_prediction_results.py` scripts, and the GPU utility
+`utils.py`. The total above uses those exclusions; individual modules can have
+coverage below 85%.
+
+The API tests use offline responses for the current ScoreboardV2 path, retries,
+gzip decoding, CDN/static-schedule fallbacks, and recovery of missing team IDs.
+They do not require live NBA services.
 
 ### Architecture (v2.0)
 
