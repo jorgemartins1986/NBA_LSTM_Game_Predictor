@@ -6,6 +6,10 @@ __pycache__/
 *.egg-info
 .eggs/
 
+# Generated test coverage data (keep .coveragerc tracked)
+.coverage
+.coverage.*
+
 # Environment variables (NEVER commit secrets!)
 .env
 .env.local

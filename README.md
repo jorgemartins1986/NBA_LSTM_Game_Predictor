@@ -1,577 +1,320 @@
-# NBA Game Predictor - Ensemble Model
+# NBA Game Predictor
 
-## 📋 Overview
+A Python project for predicting NBA game winners with XGBoost, Random Forest,
+Logistic Regression, and an attention-based LSTM. It provides a command-line
+workflow, a FastAPI web interface, local game caches, and prediction tracking.
 
-An ensemble-based NBA game prediction system combining multiple models with stacking and Platt calibration. The system uses rolling team statistics, ELO ratings, and Dean Oliver's Four Factors to predict game outcomes.
+The repository does not establish a single current production accuracy figure.
+Training output, historical reports, and recorded live predictions describe
+different samples. Read [evaluation and accuracy](docs/NBAPREDICTIONCEILING.md)
+before interpreting those numbers.
 
-**Current ensemble accuracy: ~64.5%** (realistic for sports prediction; market edge is typically 52-55%)
+## Setup
 
-### Models in the Ensemble
-| Model | Type | Accuracy | Purpose |
-|-------|------|----------|---------||
-| XGBoost | Gradient Boosting | 64.71% | Tree-based learner with tuned hyperparameters |
-| Random Forest | Ensemble Trees | 63.68% | Robust ensemble with feature selection (top 40) |
-| Logistic Regression | Linear | 63.37% | L2-regularized baseline with balanced class weights |
-| LSTM | Neural Network | 65.33% | Attention-enhanced deep learning |
+Run commands from the repository root. On Windows PowerShell:
 
-Predictions are combined via **ensemble voting** with optional **stacking meta-learner** and **Platt calibration**.
-
----
-
-## 🚀 Quick Start
-
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements.txt
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-### 2. Predict Today's Games
+The current environment uses Python 3.12. Dependencies are not fully pinned;
+changing pandas, NumPy, TensorFlow, or scikit-learn can affect saved-artifact
+compatibility. On macOS/Linux, activate with `source venv/bin/activate`.
 
-```bash
-python main.py predict
+A fresh checkout has no trained models or game cache: `models/`, `cache/`, and
+`reports/` are ignored. Train locally or supply a compatible complete model set
+before predicting. Training overwrites the standard model filenames; keep a
+backup if you need to compare model versions.
+
+## Main commands
+
+```powershell
+python -m main train
+python -m main predict
+python -m main --stats
+python -m main --updateresults
+python -m main --updateresults --all
+python -m main --updateresults 2026-10-16
 ```
 
-### 3. View Detailed Statistics
+The default result update targets yesterday. `--all` processes pending dates.
+`--no-cache` and `--no-lgf` apply to result updates, not feature-cache rebuilding:
 
-```bash
-python main.py --stats
+```powershell
+python -m main --updateresults --all --no-cache --no-lgf
 ```
 
-### 4. Train the Ensemble
+For model selection, explicit dates, and manual matchups:
 
-```bash
-python main.py train
+```powershell
+python predict.py --model xgboost
+python predict.py --model rf
+python predict.py --model logistic
+python predict.py --model lstm
+python predict.py --date 2026-10-17
+python predict.py --manual-games matchups.json
 ```
 
-Feature preparation runs in worker processes without loading TensorFlow in each
-worker. TensorFlow informational startup messages are hidden by default; warnings
-and errors remain visible. To show startup details in PowerShell, set
-`$env:TF_CPP_MIN_LOG_LEVEL = "0"` before running the command. oneDNN optimizations
-remain enabled.
+`ensemble` is the default; `rf` aliases `random_forest`. A manual JSON file is an
+array of objects with `home_team_id`, `away_team_id`, `game_status`, and optionally
+`game_date`. See the [prediction guide](docs/PREDICTIONGUIDE.md) for an example.
+`python -m main predict --date YYYY-MM-DD` also overrides the schedule date.
 
-Feature and matchup caches record the pandas/NumPy versions and rolling-window
-size. Old or incompatible caches rebuild automatically from the raw game history
-with a short `Rebuilding ...` message. Expect one rebuild after this update;
-later runs reuse compatible caches. Cache writes replace the previous file only
-after the new file has been written successfully.
+A date override does not turn the CLI into a historical backtester: standings
+and odds are fetched live, and the active season remains configuration-driven.
 
-### 5. Update Results After Games
+## Season and early-season history
 
-```bash
-python main.py --updateresults          # Update yesterday's games
-python main.py --updateresults --all    # Update all pending
-python main.py --updateresults 2026-01-15  # Specific date
+Current checked-in `config/season.json`:
+
+```json
+{
+  "current_season": "2026-27",
+  "include_preseason": true,
+  "use_previous_season": true
+}
 ```
 
-### 6. Run Web GUI (FastAPI)
+- `current_season` selects prediction data, live standings, and cache updates.
+  Set it to `null` for automatic October rollover in America/New_York time.
+- `include_preseason` controls preseason records in prediction history inputs.
+  Postseason remains eligible. The raw cache retains records for later toggling.
+- `use_previous_season` fills the 20-game statistics window from the immediately
+  previous season. Current-season results gradually replace that history. The
+  option defaults to false when omitted, though the checked-in file enables it.
 
-```bash
-uvicorn webapp.main:app --host 0.0.0.0 --port 7860
+Upcoming-game features use completed results strictly before the prediction date
+and remove duplicate team/game records. One eligible game permits an attempt;
+most rolling averages and standard deviations need five. With fewer games,
+missing values use defaults or zeros. Twenty games fill the window.
+
+Form, streaks, and fatigue use current-season results only. An opener with no
+current-season results uses neutral form and three rest days. H2H uses earlier
+current-season results; prediction standings come from the live API. CLI output
+and web responses report current/previous-season window counts.
+
+Carryover remains experimental: improved accuracy for the saved ensemble has
+not been established. These switches configure prediction inputs; the training
+matchup builder does not apply the same season filtering and form resets.
+Changing them does not retrain saved models.
+
+## Training and features
+
+`python train.py` and `python -m main train` run the same ensemble entry point:
+
+1. Load/download historical data, update the active season when a cache exists,
+   and calculate chronological ELO ratings.
+2. Build rolling team features and one row per valid home/away matchup. Rows
+   without sufficient rolling history are removed from the training dataset.
+3. Split input row order 80/20 without shuffling; fit scalers on training data.
+4. Train XGBoost, Random Forest, Logistic Regression, and LSTM.
+5. Evaluate the base-model average, fit a stacking classifier and Platt calibrator,
+   then save model artifacts.
+
+Recency weights are passed to XGBoost, Random Forest, and LSTM. The Logistic
+Regression trainer currently fits without those weights. Random Forest selects
+up to 40 features and stores the selected indices with its model.
+
+The training split is reused for early stopping and for fitting/evaluating
+stacking and calibration. Printed scores are development results, not an
+independent final holdout. The final `Average Accuracy` is the mean of individual
+model accuracies, not the evaluated ensemble accuracy. Training prints metrics;
+the current entry point does not automatically call the separate
+`save_classification_reports` exporter, so a new timestamped report is not guaranteed.
+
+Default trainer settings live in `src/training/trainers.py`. The standard entry
+point does not read `config/best_xgb_params.json` automatically.
+
+Current matchup inputs include shooting/counting-stat rolling means/stds,
+Four Factors and efficiency proxies, recent form, fatigue, H2H, standings, and
+standings differences. Current-game `PLUS_MINUS` is not a rolling model input;
+H2H point differential uses earlier meetings. Exact columns and order come from
+`models/ensemble_features.pkl`, rather than a fixed documented feature count.
+
+ELO columns are calculated in the enriched game data, but the current matchup
+builder does **not** copy them into ensemble inputs. Historical odds enrichment
+is also separate from standard training. See [ELO and caching](docs/ELOplusCACHINGsummary.md).
+
+## Saved models and prediction behavior
+
+With the default model order, training writes these files under `models/`:
+
+| File | Purpose |
+| --- | --- |
+| `nba_ensemble_xgboost_1.json` | XGBoost model |
+| `nba_ensemble_rf_2.pkl` | Random Forest and selected feature indices |
+| `nba_ensemble_logistic_3.pkl` | Logistic Regression |
+| `nba_ensemble_model_4.keras` | LSTM |
+| `ensemble_scalers.pkl` | Scalers in model order |
+| `ensemble_features.pkl` | Feature names in input order |
+| `ensemble_model_types.pkl` | Model types in saved order |
+| `ensemble_stack_meta_lr.pkl` | Stacking classifier |
+| `ensemble_stack_platt.pkl` | Platt calibrator |
+
+The loader can also read optional `ensemble_weights.pkl` with `weights` and
+`threshold`. Standard training does not create or refresh that file. Check any
+existing weights/threshold against a newly trained model set.
+
+Displayed home probability is the base-model probability average, weighted when
+compatible optional weights exist. The winner is HOME when that probability is
+greater than the saved threshold (default 0.5), otherwise AWAY. Stacking/calibration
+produce a separate `stacked_probability`; they do not select the displayed winner.
+
+Confidence is `2 * abs(home_probability - 0.5)`. Agreement is
+`1 - std(individual_home_probabilities)`, not a voting percentage. Neither is a
+measured accuracy or a statistical confidence interval.
+
+| Tier | Confidence | Larger of home/away probabilities |
+| --- | --- | --- |
+| EXCELLENT | >= 50% | >= 75% |
+| STRONG | 40% to < 50% | 70% to < 75% |
+| GOOD | 30% to < 40% | 65% to < 70% |
+| MODERATE | 20% to < 30% | 60% to < 65% |
+| RISKY | 10% to < 20% | 55% to < 60% |
+| SKIP | < 10% | < 55% |
+
+A custom winner threshold can select a team other than the one with the larger
+probability. Tiers continue to measure distance from 0.5, not betting value.
+
+## Data refresh and caches
+
+CLI predictions attempt an active-season cache refresh before fetching team
+history. The web service reads cached season data when available and does not
+perform that same refresh. Refresh explicitly when using the web interface:
+
+```powershell
+python -c "from src.nba_data_manager import NBADataManager; NBADataManager().update_current_season()"
 ```
 
-Then open: `http://localhost:7860`
+On an empty cache, the training loader's default historical list runs from
+2005-06 through 2025-26. That cold-start branch does not also update 2026-27.
+After bootstrapping, refresh the configured season before relying on its results;
+the cache guide explains how to request a different initial season list.
 
-### 7. Run with Docker
+| Cache file under `cache/` | Contents |
+| --- | --- |
+| `nba_games_cache.csv` | Raw team/game records and season labels |
+| `nba_elo_cache.pkl` | Latest ELO rating dictionary |
+| `feature_cache.pkl` | Versioned engineered team features |
+| `matchup_cache.pkl` | Versioned matchup dataframe |
+| `nba_games_enriched.csv` | Exported games with engineered columns |
+| `nba_matchups.csv` | Exported matchups and `HOME_WIN` target |
 
-```bash
+Feature/matchup headers record pandas/NumPy versions and window size. Legacy,
+unreadable, or mismatched caches rebuild automatically. Atomic replacement
+protects the previous file if a cache save fails. These caches are disposable;
+models and prediction history are separate.
+
+Caches are not a general source-data fingerprint: corrections to older records
+or changed feature formulas may require an explicit rebuild. CSV row counts,
+file sizes, and training duration vary with cache contents and hardware.
+
+Feature workers load the lightweight `src/feature_engineering.py` module rather
+than importing TensorFlow. Informational TensorFlow startup logs are hidden by
+default while warnings/errors remain visible. To show startup details:
+
+```powershell
+$env:TF_CPP_MIN_LOG_LEVEL = "0"
+```
+
+This logging setting does not disable oneDNN optimizations. CPU fallback is
+supported; GPU detection depends on the installed TensorFlow build and platform.
+
+## Prediction history and results
+
+CLI predictions append to `reports/prediction_history.csv`; duplicate date/away/home
+pairs are skipped, so rerunning a model does not replace an existing pick.
+Old fully finished schedules can be excluded from saving. The web prediction
+endpoint returns predictions without writing them to this CSV.
+
+History columns are `date`, `away_team`, `home_team`, `prediction`, `winner`,
+`confidence`, `home_win_prob`, `model_agreement`, `tier`, and `correct`.
+`winner` and `correct` are populated by the result updater. Dates normally use
+Eastern time; manual games can supply their own date.
+
+`--stats` summarizes completed picks by tier, confidence, agreement, date, and
+other groups. The displayed ROI and profitable-filter calculations assume fixed
+**1.41 decimal odds**; history does not record actual accepted odds, stakes, or
+payouts. Those figures are hypothetical, and filters selected on the same history
+need later validation. Straight-up accuracy does not imply spread accuracy or profit.
+
+## Optional bookmaker odds
+
+Set `ODDS_API_KEY` in the process environment or a local `.env` file:
+
+```powershell
+$env:ODDS_API_KEY = "your_key_here"
+python scripts/setup_odds_api.py
+python -m main predict
+```
+
+`src/odds_api.py` loads `.env`. Keep credentials out of Git. Provider plans and
+request costs are not fixed by this repository. Prediction continues without odds
+when the key or service is unavailable. Odds influence model inputs only when
+matching columns exist in the saved feature schema; standard training does not
+add historical odds automatically.
+
+## Web interface and Docker
+
+```powershell
+python -m uvicorn webapp.main:app --host 127.0.0.1 --port 7860
+```
+
+Open `http://127.0.0.1:7860`. Routes include `/stats`, `/health`, and
+`POST /api/predict` with a body such as `{"model": "ensemble"}`. Model choices
+match the CLI. The service caches loaded pipelines; restart it after replacing
+model files. It does not train models or update prediction-history results.
+
+```powershell
 docker build -t nba-predictor-web .
 docker run --rm -p 7860:7860 nba-predictor-web
-```
-
-Or with Compose:
-
-```bash
+# Or use the supplied Compose configuration:
 docker compose up --build
 ```
 
-### 8. Deploy to Hugging Face Spaces (Docker)
+The Dockerfile starts Uvicorn on `PORT` (default 7860). A deployment must include
+compatible model artifacts or mount them into `/app/models`; a source-only clone
+cannot predict. The supplied Compose file does not mount persistent data volumes
+or pass an odds key. Configure volumes/environment for your deployment. Files
+written only inside a disposable container do not persist after removal.
 
-1. Create a new Space with SDK set to `Docker`.
-2. Push this repository to the Space repo.
-3. The included `Dockerfile` serves FastAPI on port `7860` (required by Spaces).
-4. Keep model files and required artifacts in the repo (or pull them from remote storage at startup).
+## Tests and coverage
 
----
+Latest verified suite: **502 passed**, **88.11% line coverage**. Coverage runs
+require at least **85%** under `.coveragerc`:
 
-## 📁 Project Structure
-
-```
-NBA_LSTM_Game_Predictor/
-│
-├── train.py                      # Entry point: train ensemble
-├── predict.py                    # Entry point: make predictions
-├── main.py                       # Unified CLI (predict, train, stats, update)
-│
-├── src/                          # Core source code
-│   ├── __init__.py
-│   ├── paths.py                  # Path configuration
-│   ├── utils.py                  # Shared utilities (GPU config)
-│   ├── nba_data_manager.py       # Data fetching & ELO ratings
-│   ├── nba_predictor.py          # Feature engineering
-│   ├── update_prediction_results.py # Result tracking
-│   ├── odds_api.py               # Live betting odds integration
-│   │
-│   ├── training/                 # Modular training module
-│   │   ├── __init__.py           # Module exports
-│   │   ├── data_prep.py          # DataPreparation, TrainTestData
-│   │   ├── trainers.py           # XGBoostTrainer, RFTrainer, etc.
-│   │   ├── evaluation.py         # ModelEvaluator, metrics
-│   │   └── ensemble.py           # EnsembleTrainer coordinator
-│   │
-│   └── prediction/               # Modular prediction module
-│       ├── __init__.py           # Module exports
-│       ├── features.py           # FeatureComputer, GameFeatures
-│       ├── loader.py             # ModelLoader, LoadedEnsemble
-│       ├── nba_data.py           # Live NBA API data fetching
-│       ├── odds.py               # Odds integration
-│       ├── history.py            # Prediction history
-│       └── pipeline.py           # PredictionPipeline
-│
-├── models/                       # Trained models (git-ignored)
-│   ├── nba_ensemble_xgboost_1.json
-│   ├── nba_ensemble_rf_2.pkl
-│   ├── nba_ensemble_logistic_3.pkl
-│   ├── nba_ensemble_model_4.keras
-│   └── ensemble_*.pkl            # Scalers, features, meta-model
-│
-├── cache/                        # Data caches (git-ignored)
-│   ├── nba_games_cache.csv       # Raw historical game data (8 MB)
-│   ├── nba_games_enriched.csv    # Games with rolling features (70 MB)
-│   ├── nba_matchups.csv          # Full matchup dataset (37 MB, 117 features)
-│   ├── nba_historical_odds.csv   # Historical betting odds (optional)
-│   ├── nba_elo_cache.pkl         # ELO ratings
-│   └── *_cache.pkl               # Feature caches
-│
-├── config/                       # Configuration files
-│   └── best_xgb_params.json      # Tuned XGBoost hyperparameters
-│
-├── reports/                      # Training reports (git-ignored)
-│   └── model_reports_*.txt/.json
-│
-├── scripts/                      # Utility scripts
-│   └── setup_odds_api.py         # Odds API setup & test
-│
-├── tests/                        # Test suite (440 tests)
-│   ├── __init__.py
-│   ├── conftest.py               # Pytest fixtures
-│   ├── test_paths.py
-│   ├── test_utils.py
-│   ├── test_elo_system.py
-│   ├── test_data_manager.py
-│   ├── test_data_manager_integration.py
-│   ├── test_odds_api.py
-│   ├── test_odds_api_integration.py
-│   ├── test_odds_api_features.py     # Odds static methods & enricher
-│   ├── test_ensemble_predictor.py
-│   ├── test_ensemble_integration.py
-│   ├── test_main.py
-│   ├── test_predict.py               # Game filtering (All-Star handling)
-│   ├── test_training_data_prep.py    # DataPreparation tests
-│   ├── test_training_trainers.py     # Trainer tests
-│   ├── test_training_evaluation.py   # Evaluator tests
-│   ├── test_training_ensemble.py     # EnsembleTrainer tests
-│   ├── test_training_stacking.py     # Stacking meta-model tests
-│   ├── test_prediction_features.py   # FeatureComputer tests
-│   ├── test_prediction_loader.py     # ModelLoader tests
-│   ├── test_prediction_nba_data.py   # NBA data helpers
-│   ├── test_prediction_nba_data_api.py # NBA API mocked tests
-│   └── test_prediction_pipeline.py   # Pipeline tests
-│
-├── docs/                         # Documentation
-│   ├── PREDICTIONGUIDE.md
-│   ├── NBAPREDICTIONCEILING.md
-│   └── ELOplusCACHINGsummary.md
-│
-├── pytest.ini                    # Pytest configuration
-├── .coveragerc                   # Coverage configuration
-├── requirements.txt
-└── README.md
+```powershell
+python -m pytest
+python -m pytest --cov=src --cov-config=.coveragerc --cov-report=term-missing
+python -m pytest --cov=src --cov-config=.coveragerc --cov-report=html
 ```
 
----
-
-## 🧪 Testing
-
-The test suite has **502 passing tests** and **88.11% line coverage** in the configured core-module scope. Coverage runs enforce an **85% minimum**.
-
-### Run Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest tests/test_elo_system.py
-
-# Run tests with coverage report
-pytest --cov=src --cov-report=term-missing
-
-# Generate HTML coverage report
-pytest --cov=src --cov-report=html
-# View at: reports/coverage_html/index.html
-```
-
-### Test Coverage
-
-| Module | Coverage | Notes |
-|--------|----------|-------|
-| `paths.py` | 100% | Fully covered |
-| `training/data_prep.py` | 100% | Data preparation |
-| `prediction/pipeline.py` | 100% | Prediction pipeline |
-| `prediction/features.py` | 91% | Feature computation |
-| `prediction/nba_data.py` | 87% | NBA API data fetching |
-| `training/ensemble.py` | 81% | Ensemble coordinator + stacking |
-| `prediction/loader.py` | 85% | Model loading |
-| `training/evaluation.py` | 97% | Model evaluation |
-| `training/trainers.py` | 84% | Model trainers |
-| `nba_data_manager.py` | 83% | Core ELO system |
-| `odds_api.py` | 82% | Odds features & enricher |
-| `feature_engineering.py` | 100% | Rolling feature calculations |
-| `dataframe_cache.py` | 96% | Cache compatibility and recovery |
-
-**Total Coverage: 88.11%** (required minimum: 85%).
-
-The existing `.coveragerc` scope excludes package initializers, the legacy
-`nba_predictor.py` and `update_prediction_results.py` scripts, and the GPU utility
-`utils.py`. The total above uses those exclusions; individual modules can have
-coverage below 85%.
-
-The API tests use offline responses for the current ScoreboardV2 path, retries,
-gzip decoding, CDN/static-schedule fallbacks, and recovery of missing team IDs.
-They do not require live NBA services.
-
-### Architecture (v2.0)
-
-The codebase uses **dependency injection** and **factory patterns** for testability:
-
-```python
-# Example: Training with injectable dependencies
-from src.training import EnsembleTrainer, EnsembleConfig
-
-config = EnsembleConfig(architectures=['xgboost', 'logistic'])
-trainer = EnsembleTrainer(config=config)
-result = trainer.train(matchup_df)
-
-# Example: Prediction with injectable loader
-from src.prediction import PredictionPipeline, ModelLoader
-
-loader = ModelLoader()
-ensemble = loader.load_ensemble()
-pipeline = PredictionPipeline(ensemble)
-result = pipeline.predict(game_features)
-```
-
----
-
-## 💰 Betting Odds Integration (Optional)
-
-The system can optionally fetch live bookmaker odds to:
-- Display odds alongside model predictions
-- Show "value" when model disagrees with the market
-- (Future) Use odds as training features
-
-### Setup
-
-1. Get a free API key from [The-Odds-API](https://the-odds-api.com/) (500 free credits/month)
-2. Set the environment variable:
-   ```powershell
-   # PowerShell
-   $env:ODDS_API_KEY = "your_api_key_here"
-   
-   # Or permanently in your profile
-   [Environment]::SetEnvironmentVariable("ODDS_API_KEY", "your_key", "User")
-   ```
-3. Run predictions - odds will appear automatically:
-   ```bash
-   python main.py predict
-   ```
-
-### What You'll See
-
-```
-🏆 Predicted Winner: Boston Celtics
-📊 Confidence: 32.5%
-🏠 Home Win Prob: 66.2%
-✈️  Away Win Prob: 33.8%
-💰 Bookmaker Odds: Home 1.52 (66%) | Away 2.65 (38%)
-🔥 Value: Model 66.2% vs Market 65.8% (+0.4%)
-```
-
-### API Costs
-
-| Endpoint | Credits | What You Get |
-|----------|---------|--------------|
-| Live odds | 1/call | Today's games from EU bookmakers |
-| Historical | 10/call | One date of historical odds |
-
-With 500 free credits/month: ~500 live calls or ~50 historical dates
-
----
-
-## 🔄 Training the Ensemble
-
-### Full Training
-
-```bash
-python train.py
-```
-
-This will:
-1. Load/update game data from cache (or download if first run)
-2. Prepare matchup features with chronological split (80% train / 20% test)
-3. Compute all features: rolling stats, ELO, H2H, standings, fatigue
-4. **Export enriched datasets to CSV** (`cache/nba_matchups.csv`)
-5. Train all 4 models: XGBoost, Random Forest, Logistic Regression, LSTM
-6. Apply sample weighting (recent games weighted more heavily)
-7. Build stacking meta-model and Platt calibrator
-8. Save all artifacts to `models/`
-
-**Training time:** ~10-20 minutes (depending on hardware)
-
----
-
-## 🎯 Bet Quality Tiers
-
-The prediction output includes tiers based on **model certainty** (how far the probability is from 50%):
-
-| Tier | Confidence | Probability | Meaning |
-|------|------------|-------------|-------------|
-| ⭐⭐⭐⭐⭐ EXCELLENT | 50%+ | 75%+ | Very confident |
-| ⭐⭐⭐⭐ STRONG | 40-50% | 70-75% | Confident |
-| ⭐⭐⭐ GOOD | 30-40% | 65-70% | Moderately confident |
-| ⭐⭐ MODERATE | 20-30% | 60-65% | Slight lean |
-| ⭐ RISKY | 10-20% | 55-60% | Near toss-up |
-| ⛔ SKIP | <10% | <55% | No clear winner |
-
-**Note:** Tier and confidence measure the same thing - model certainty. Confidence is the raw percentage, tier is the bucketed label.
-
-**Model Agreement** indicates how much the 4 models agree (different from confidence). High agreement + high confidence = strongest predictions.
-
----
-
-## 📊 Features Used
-
-### Rolling Statistics (20-game window)
-- Points, rebounds, assists, steals, blocks, turnovers
-- Field goal %, 3-point %, free throw %
-- Plus/minus differential
-
-### Dean Oliver's Four Factors
-- **eFG%** (Effective Field Goal %)
-- **TOV%** (Turnover Rate)
-- **ORB%** (Offensive Rebound Rate)
-- **FT Rate** (Free Throw Rate)
-
-### Momentum Features
-- Win streak
-- Recent form (last 5 games)
-- Win consistency (std dev)
-- 3-game win pattern
-
-### Fatigue Features (NEW)
-- **Days of rest** since last game
-- **Back-to-back** indicator (played yesterday)
-- **3-in-4 nights** indicator (3 games in 4 days)
-
-### Head-to-Head Features
-- H2H win rate (last 10 meetings)
-- H2H games played
-- H2H point differential
-
-### Standings Features (NEW)
-- **Conference rank** (1-15)
-- **League rank** (1-30)
-- **Wins/Losses** at time of game
-- **Win percentage**
-- **Games back** from conference leader
-- **Current streak** (positive = wins, negative = losses)
-- **Rank differential** between teams
-- **Win % differential** between teams
-
-### ELO Ratings
-- Pre-game ELO for home/away
-- ELO differential
-- Expected win probability from ELO
-
----
-
-## 🔧 Updating Game Data
-
-### Update Current Season Only
-
-```bash
-python scripts/fetch_and_update_games.py --update-current --cache-file nba_games_cache.csv
-```
-
-### Download Specific Seasons
-
-```bash
-python scripts/fetch_and_update_games.py --download-seasons 2023-24 2024-25 --cache-file nba_games_cache.csv
-```
-
----
-
-## � Prediction History & Tracking
-
-The system automatically tracks all predictions and results for performance analysis.
-
-### Daily Workflow
-
-```bash
-# 1. Run predictions (auto-saves to history)
-python main.py predict
-
-# 2. Next day: update with actual results
-python main.py --updateresults
-
-# 3. View detailed accuracy statistics
-python main.py --stats
-```
-
-### History File Format
-
-Predictions are saved to `reports/prediction_history.csv`:
-
-| Column | Description |
-|--------|-------------|
-| `date` | Prediction date (YYYY-MM-DD) |
-| `away_team` | Away team full name |
-| `home_team` | Home team full name |
-| `prediction` | Predicted winner |
-| `winner` | Actual winner (filled after game) |
-| `confidence` | Model confidence (0-1, distance from 50%) |
-| `home_win_prob` | Home win probability (0-1) |
-| `model_agreement` | How much models agreed (0-1) |
-| `tier` | Bet quality tier (EXCELLENT/STRONG/GOOD/MODERATE/RISKY/SKIP) |
-| `correct` | 1 if correct, 0 if wrong |
-
-### Update Results Commands
-
-```bash
-# Update yesterday's results (default)
-python main.py --updateresults
-
-# Update specific date
-python main.py --updateresults 2026-01-17
-
-# Update all pending results
-python main.py --updateresults --all
-
-# View detailed statistics only
-python main.py --stats
-```
-
-### Statistics Output
-
-The `--stats` command shows comprehensive breakdown:
-- **Overall accuracy** with date range
-- **By bet quality tier** with estimated ROI
-- **By confidence level** (10 granular buckets)
-- **By model agreement** (6 buckets)
-- **By home win probability** (calibration check)
-- **Time-based performance** (3/7/14/30 days)
-- **Day of week analysis**
-- **Streaks** (current, best win, worst loss)
-- **Profitable filters** (combinations that beat the vig)
-
-### Recommended Retraining Schedule
-
-- **Daily**: Run predictions (data is fresh via API)
-- **Every 2 weeks**: Full retrain with `python train.py`
-- **When accuracy drops**: Check stats and retrain if needed
-
----
-
-## �🛠️ Troubleshooting
-
-### "No games found for today"
-- Check if it's the off-season or no games scheduled
-- NBA API live scoreboard only shows games on game days
-
-### "Not enough data for prediction"
-- At least one team has no game records in the active season. The 20-game window is not a minimum requirement.
-- Set the active season in `config/season.json`, for example `{"current_season": "2026-27"}`. Prediction, live standings, and cache updates share this setting. Set it to `null` for automatic October rollover.
-- Set `"include_preseason": true` in `config/season.json` to include preseason in recent statistics, or `false` to exclude it. The flag applies to cached data and both API paths; postseason remains included. The cache stores all game types so the flag can be switched without deleting data.
-- Set `"use_previous_season": true` to fill each team's 20-game statistical window with its latest games from the immediately previous season. Set it to `false` for current-season inputs only. Preseason filtering applies to both seasons. Streaks, recent form, standings, and fatigue reset for the current season; head-to-head uses current-season history only.
-- Upcoming-game statistics use only completed games strictly before the prediction date, including the most recently completed game. At least 1 eligible game per team permits prediction; 5 provide most rolling averages/stds, and 20 fill the window. Missing statistics are still filled with zeros. CLI output and the web API report the window's current/previous-season counts.
-
-### Module import errors
-```bash
-# Activate virtual environment first
-.\venv\Scripts\Activate.ps1   # Windows
-source venv/bin/activate       # Mac/Linux
-
-# Then run
-python predict.py
-```
-
-### Low accuracy after retraining
-- Ensure chronological split is used (shuffle=False)
-- Check that all 4 models trained successfully
-- Verify stacking artifacts were saved
-
----
-
-## � Enriched Datasets
-
-Training automatically exports portable CSV datasets you can use in other projects:
-
-| File | Size | Description |
-|------|------|-------------|
-| `nba_games_cache.csv` | 8 MB | Raw game data from NBA API |
-| `nba_games_enriched.csv` | 70 MB | Games with all rolling features |
-| `nba_matchups.csv` | 37 MB | **28,000+ matchups with 117 features** |
-
-The `nba_matchups.csv` contains the complete feature-engineered dataset ready for ML:
-- Rolling statistics (20-game window)
-- ELO ratings and differentials
-- Head-to-head historical records
-- Standings at time of each game
-- Fatigue indicators (rest days, B2B, 3-in-4)
-- Target variable: `HOME_WIN` (1/0)
-
-**Use in other projects:**
-```python
-import pandas as pd
-df = pd.read_csv('cache/nba_matchups.csv')
-X = df.drop(['GAME_ID', 'GAME_DATE', 'HOME_WIN', 'HOME_TEAM_ID', 'AWAY_TEAM_ID'], axis=1)
-y = df['HOME_WIN']
-```
-
----
-
-## �📈 Improving Accuracy
-
-### Feature Ideas (not yet implemented)
-- Travel distance / timezone changes
-- Injury reports integration
-- Referee tendencies
-
-### Model Ideas
-- Transformer attention on recent games
-- Gradient boosting hyperparameter tuning
-- Alternative neural network architectures
-
----
-
-## ⚠️ Disclaimer
-
-This project is for **educational and research purposes only**. Sports betting involves significant risk. Historical accuracy does not guarantee future results. Always gamble responsibly.
-
-**Realistic expectations:** Professional sports bettors typically achieve 52-55% accuracy. This model aims for 60-65%, providing a potential edge but not guaranteed profits.
-
----
-
-## 📚 References
-
-- [NBA API](https://github.com/swar/nba_api)
-- Dean Oliver's Four Factors of Basketball Success
-- ELO Rating System (adapted from chess)
-
----
-
-Good luck with your predictions! 🏀
+The HTML report is `reports/coverage_html/index.html`. `.coverage` and worker
+coverage data are generated and ignored; `.coveragerc` is tracked configuration.
+A plain pytest run does not measure coverage. Existing exclusions are package
+initializers, `src/nba_predictor.py`, `src/update_prediction_results.py`, and
+`src/utils.py`. The percentage is aggregate line coverage in that scope, not a
+per-module guarantee or evidence of predictive accuracy. API recovery tests use
+offline mocks, not a check that live NBA endpoints currently work.
+
+## Project map and further reading
+
+| Path | Responsibility |
+| --- | --- |
+| `main.py`, `train.py`, `predict.py` | CLI entry points |
+| `src/training/` | Data preparation, trainers, ensemble evaluation |
+| `src/prediction/` | Model loading, feature vectors, NBA/odds inputs, history |
+| `src/feature_engineering.py` | Rolling team calculations and worker function |
+| `src/dataframe_cache.py` | Versioned feature/matchup cache I/O |
+| `src/nba_data_manager.py` | Historical/current-season data and ELO |
+| `src/nba_predictor.py` | Matchup builder and neural-network architectures |
+| `src/season_config.py`, `src/paths.py` | Season settings and paths |
+| `webapp/`, `src/web/` | FastAPI routes, templates, prediction service |
+| `scripts/` | Odds setup and repeatable offline evaluation tools |
+| `tests/` | Unit and integration tests |
+
+- [Prediction guide](docs/PREDICTIONGUIDE.md): daily workflow and troubleshooting.
+- [ELO and caching](docs/ELOplusCACHINGsummary.md): data lifecycle and actual ELO integration.
+- [Evaluation and accuracy](docs/NBAPREDICTIONCEILING.md): metrics and validation limits.

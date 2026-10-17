@@ -1,304 +1,155 @@
-# NBA Predictor Improvements Summary
+# ELO and caching
 
-## 🎯 Your Current Status
+This document describes the current implementation, not expected accuracy gains.
+Main sources are `src/nba_data_manager.py`, `src/feature_engineering.py`,
+`src/dataframe_cache.py`, and the matchup builder in `src/nba_predictor.py`.
+See the [README](../README.md) for setup and the [prediction guide](PREDICTIONGUIDE.md)
+for day-to-day commands.
 
-**Ensemble Accuracy: 65.24%**
-- XGBoost: 63.51%
-- Deep NN: 64.89%
-- CNN Hybrid: 63.62%
+## Raw game data
 
-**Target: 67-69%** (+2-4%)
+`NBADataManager.get_games()` downloads historical data when the raw cache is
+missing, otherwise attempts an active-season update. The default initial list is
+2005-06 through 2025-26. It is a fixed list, not an automatically extended season
+range. On a cold start it does not separately fetch the configured 2026-27 season.
 
----
+`update_current_season()` takes its default from `config/season.json`. It requests
+that whole season with an empty season-type filter, removes the cached rows for
+that season, inserts the response, sorts by date, and saves the CSV. This replaces
+a season; it is not a request restricted to games since the last cached date.
+On an update exception, it attempts to return the existing cache.
 
-## ✅ New Features Implemented
+After bootstrapping historical data, refresh the active season:
 
-### 1. **Local Data Caching** 💾
-
-**Problem:** Downloading 21 seasons every time takes 10-20 minutes
-
-**Solution:** Cache to CSV, only update current season
-
-**Benefits:**
-- ⚡ **First run:** 15-20 mins (downloads everything)
-- ⚡ **Subsequent runs:** 10-30 seconds (loads from cache!)
-- ⚡ **Updates:** Only fetches 2025-26 season (~30 seconds)
-
-**Files created:**
-- `nba_games_cache.csv` - All game data (~50MB)
-- `nba_elo_cache.pkl` - Current ELO ratings
-
-### 2. **ELO Rating System** ⚖️
-
-**What it does:**
-- Tracks team strength over time
-- Updates after every game
-- Accounts for home court advantage (+100 ELO points)
-- Regresses 25% toward mean between seasons
-
-**New features added to dataset:**
-- `ELO_HOME` - Home team's ELO before game
-- `ELO_AWAY` - Away team's ELO before game
-- `ELO_DIFF` - ELO difference (home advantage)
-- `ELO_PROB_HOME` - Win probability from ELO alone
-
-**Why ELO helps:**
-- Captures momentum (hot/cold streaks)
-- Better than win-loss record alone
-- Accounts for strength of schedule
-- Single number that represents team strength
-
----
-
-## 🚀 How to Use
-
-### First Time Setup:
-
-```bash
-python main.py train
+```powershell
+python -c "from src.nba_data_manager import NBADataManager; NBADataManager().update_current_season()"
 ```
 
-This downloads all data and calculates ELO ratings. Takes ~15-20 mins.
-
-### Train Ensemble (Now with ELO):
-
-```bash
-python main.py train
-```
-
-**Now:**
-- ✅ Uses cached data (MUCH faster!)
-- ✅ Includes ELO features automatically
-- ✅ Updates current season only
-
-### Update Data (Weekly):
+To choose an initial history explicitly, run Python from the project root:
 
 ```python
 from src.nba_data_manager import NBADataManager
 
 manager = NBADataManager()
-games_df = manager.update_current_season()  # Quick!
+games = manager.get_games(seasons=['2025-26', '2026-27'], force_download=True)
 ```
 
----
+`force_download=True` replaces the raw cache with the requested seasons. Without
+that flag, a supplied season list is only used when the cache is absent. A short
+history changes the training sample; it is not a guaranteed improvement.
 
-## 📊 Expected Improvements
+## ELO calculation
 
-### From ELO Features:
+`get_games()` rebuilds ratings chronologically over the loaded data and saves the
+latest team ratings to `cache/nba_elo_cache.pkl`. Defaults are:
 
-ELO adds 4 powerful features that capture:
-- Team strength momentum
-- Matchup quality
-- Home advantage dynamics
-- Win probability baseline
+| Setting | Value |
+| --- | --- |
+| Initial rating | 1500 |
+| K factor | 20 |
+| Home advantage in expected probability | +100 rating points |
+| Season transition | Keep 75% of the deviation from 1500 |
 
-**Expected gain: +1-2%** → 66-67%
+The home expectation is `1 / (1 + 10 ** ((away - (home + 100)) / 400))`.
+After a home win, the home change is `20 * (1 - expected_home)`; the away change
+is its negative. A loss uses `20 * (0 - expected_home)`.
 
-### From Better XGBoost Tuning:
+For example, home 1650 versus away 1550 gives about 75.97% home expectation
+with the default advantage. A home win adds about 4.81 points; a loss removes
+about 15.19 points. These are illustrative rating calculations, not measured
+NBA prediction performance.
 
-Your current XGBoost config:
-```python
-n_estimators=1250
-max_depth=2  # Very shallow!
-learning_rate=0.02
-```
+Both team records receive the same pregame columns:
 
-**Issue:** `max_depth=2` is TOO shallow for NBA complexity
+- `ELO_HOME` and `ELO_AWAY`: ratings before updating that game.
+- `ELO_DIFF`: home minus away rating, **without** the extra 100 home points.
+- `ELO_PROB_HOME`: expected probability including the home advantage.
 
-**Try:**
-```python
-n_estimators=800
-max_depth=7  # Deeper trees ⭐
-learning_rate=0.05
-subsample=0.75
-colsample_bytree=0.7
-min_child_weight=2
-gamma=0.05
-```
+Games without exactly one recognizable home and away row are skipped by the
+rating loop; initialized ELO values can remain zero for those rows.
+`get_current_elo_ratings()` reads the saved dictionary; it does not refresh it.
+Calling only `update_current_season()` does not recalculate that ELO file.
 
-**Expected gain: +1-2%** → 66-67%
+## ELO is not currently an ensemble input
 
-### Combined:
+The loader adds ELO columns to game data and the enriched CSV can contain them.
+However, `FeatureEngineering.create_rolling_features()` has no ELO rolling
+columns, and `NBAPredictor.prepare_matchup_data()` does not copy raw ELO columns
+into its matchup dataframe. Therefore standard ensemble training does not gain
+four ELO inputs merely because the data manager calculated them.
 
-ELO features + Better XGBoost = **67-69% ensemble** 🎯
+Prediction uses the feature names saved in `models/ensemble_features.pkl`.
+The normal CLI/web flow does not supply a separate ELO difference to stacking.
+Adding ELO to the predictive model would require consistent training and live
+feature construction, a rebuilt feature schema, retraining, and evaluation.
+No automatic accuracy uplift is established by the current ELO implementation.
 
----
+## Cache and export files
 
-## 🔧 Integration Steps
+All paths are under `cache/`, as defined by `src/paths.py`:
 
-### Step 1: Install Dependencies
+| File | Role |
+| --- | --- |
+| `nba_games_cache.csv` | Raw team/game records across cached seasons |
+| `nba_elo_cache.pkl` | Latest team-rating dictionary |
+| `feature_cache.pkl` | Engineered team history and cutoff date |
+| `matchup_cache.pkl` | Home/away training rows and cutoff date |
+| `nba_games_enriched.csv` | Inspectable export of engineered team rows |
+| `nba_matchups.csv` | Inspectable matchup export, including the target |
 
-```bash
-pip install xgboost pandas numpy scikit-learn tensorflow
-```
+Raw records are team rows, usually two per game. Their row count is not the
+number of unique games. File sizes, row counts, and timing vary.
 
-### Step 2: Initial Data Download
+Feature and matchup caches have a plain compatibility header recording format
+version, pandas version, NumPy version, data kind, and rolling-window size. The
+header is checked before unpickling pandas objects. Legacy formats, changed
+settings, corrupt payloads, and invalid dates/cutoffs cause a short `Rebuilding`
+message and recomputation from raw data. New cache files are written to a
+temporary sibling and replace the previous file only after a successful write.
 
-```bash
-python main.py train
-```
+An unchanged compatible cache can skip computation. For newly dated games,
+team features are recalculated with full history for the affected teams, while
+matchups are created after the cached cutoff. This does not detect every
+correction to an older source row. Code/formula changes are not automatically
+fingerprinted either; rebuild derived caches when those inputs change.
 
-**Output:**
-```
-DOWNLOADING ALL HISTORICAL DATA
-[1/21] Fetching 2005-06 season...
-...
-✅ Saved 56463 records to nba_games_cache.csv
-⚖️  Calculating ELO ratings...
-✓ Calculated ELO for 28231 games
-```
+## Rebuilding derived data
 
-### Step 3: Train Ensemble
-
-```bash
-python main.py train
-```
-
-**Now includes ELO automatically!**
-
-The `src/nba_predictor.py`'s `FeatureEngineering` class will automatically create rolling ELO features:
-- `ELO_HOME_ROLL_MEAN` - Average recent ELO
-- `ELO_DIFF_ROLL_MEAN` - Average ELO advantage
-- `ELO_PROB_HOME_ROLL_MEAN` - Average win probability
-
----
-
-## 🎨 How ELO Works
-
-### Example:
-
-**Before game:**
-- Lakers: ELO 1650
-- Warriors: ELO 1550
-- Home advantage: +100
-
-**Expected probability:**
-- Lakers win: 64%
-- Warriors win: 36%
-
-**After game (Lakers win):**
-- Lakers: 1650 + 7 = **1657** (exceeded expectations)
-- Warriors: 1550 - 7 = **1543** (underperformed)
-
-**If Lakers lost:**
-- Lakers: 1650 - 13 = **1637** (big surprise!)
-- Warriors: 1550 + 13 = **1563** (upset victory!)
-
-### Why This Helps Your Model:
-
-1. **Better than record:** 20-10 vs 20-10 teams might have very different ELOs based on WHO they played
-2. **Captures momentum:** Team on winning streak = rising ELO
-3. **Quality indicator:** High ELO = consistently good, not lucky
-4. **Predictive baseline:** ELO_PROB_HOME is a strong feature by itself
-
----
-
-## 📈 Performance Comparison
-
-### Before (No ELO, No Cache):
-
-```
-Data loading: 15-20 minutes
-Ensemble accuracy: 65.24%
-Features: 58
-```
-
-### After (With ELO + Cache):
-
-```
-Data loading: 10-30 seconds ⚡
-Ensemble accuracy: 67-69% (expected) 🎯
-Features: 62 (includes ELO)
-```
-
----
-
-## 🔮 Next Steps to Hit 70%
-
-### 1. **Verify ELO Integration** (Today)
-
-Run the new ensemble and check if ELO features are included:
+After updating raw data, a full derived-data rebuild can be requested in Python:
 
 ```python
-# In your training output, look for:
-✓ Using 62 features  # Up from 58!
+from src.nba_data_manager import NBADataFetcher
+from src.nba_predictor import NBAPredictor
 
-# ELO features should include:
-# - ELO_HOME, ELO_AWAY, ELO_DIFF, ELO_PROB_HOME
-# - ELO_*_ROLL_MEAN, ELO_*_ROLL_STD
+games = NBADataFetcher().fetch_games()
+matchups = NBAPredictor(window_size=20).prepare_matchup_data(games, use_cache=False)
 ```
 
-**Expected: 66-67%**
+This rewrites the standard feature/matchup caches and CSV exports. It does not
+train or replace models or rewrite prediction history. No need to delete the raw
+game cache for an incompatible feature-cache warning. CSV exports are not used
+as an automatic fallback for unreadable feature pickles.
 
-### 2. **Tune XGBoost** (Tomorrow)
+## Prediction freshness and season policies
 
-Change `max_depth=2` to `max_depth=7`:
+The CLI attempts an active-season update before predictions. The web prediction
+service does not perform that update and can keep reading an older cached season.
+`fetch_season_games()` prefers usable local data unless `NBA_FORCE_FETCH=1`.
+That environment variable affects prediction season fetching, not all cache types.
 
-```python
-max_depth=7  # Was 2, way too shallow!
-```
+`include_preseason` and `use_previous_season` apply to live prediction history.
+They do not remove raw cached records or impose identical filtering/reset rules
+on the training matchup builder. Turning carryover on does not validate its
+accuracy benefit; see [evaluation limits](NBAPREDICTIONCEILING.md).
 
-**Expected: 67-68%**
+## Worker startup and speed
 
-### 3. **Add Injury Adjustments** (Optional)
+Parallel feature workers call a function in `src/feature_engineering.py`, which
+does not import TensorFlow. They no longer repeat TensorFlow initialization and
+GPU detection for each team worker. The default worker count is CPU count minus
+one, with a minimum of one; `n_jobs` can be supplied to `prepare_matchup_data()`.
 
-Use `predict_with_injuries.py` for final predictions.
-
-**Expected: 68-70%** 🎉
-
----
-
-## 💡 Pro Tips
-
-### Tip 1: Check ELO Quality
-
-```python
-from nba_data_manager import NBADataManager
-
-manager = NBADataManager()
-ratings = manager.get_current_elo_ratings()
-
-# Best teams should have ELO > 1600
-# Worst teams should have ELO < 1400
-```
-
-### Tip 2: Cache Maintenance
-
-```bash
-# Force refresh cache (if data seems stale):
-Remove-Item cache/nba_games_cache.csv, cache/nba_elo_cache.pkl -ErrorAction SilentlyContinue
-python main.py train
-```
-
-### Tip 3: ELO K-Factor Tuning
-
-```python
-# In src/nba_data_manager.py, experiment with:
-ELORatingSystem(k_factor=20)  # Current (moderate volatility)
-ELORatingSystem(k_factor=15)  # More stable
-ELORatingSystem(k_factor=25)  # More reactive to recent games
-```
-
----
-
-## 🎯 Summary
-
-### What You Get:
-
-1. ✅ **10-20x faster data loading** (cache)
-2. ✅ **4 new predictive ELO features**
-3. ✅ **Automatic updates** (only fetch new games)
-4. ✅ **Expected +2-4% accuracy boost**
-
-### Next Run:
-
-```bash
-python ensemble_predictor.py
-```
-
-Should now show:
-- ⚡ Loads in 30 seconds (vs 20 minutes)
-- 📊 62 features (vs 58)
-- 🎯 67-69% accuracy (vs 65.24%)
-
-**You're almost at 70%!** 🚀
+Cache reuse and avoiding unnecessary imports can reduce runtime, but no fixed
+speedup or accuracy increase follows. Logging configuration hides informational
+TensorFlow startup messages while retaining warnings/errors; oneDNN remains
+configured independently.
