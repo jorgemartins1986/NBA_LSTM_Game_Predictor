@@ -26,6 +26,7 @@ from src.prediction.rolling_history import load_prediction_history, upcoming_tea
 from src.prediction.nba_data import get_current_season
 
 from src.prediction import (
+    ScheduleUnavailableError,
     ModelLoader,
     PredictionPipeline,
     FeatureComputer,
@@ -153,7 +154,8 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
     games_df = fetch_season_games(verbose=True)
     
     # Get today's games (or use manual override)
-    print("\n🏀 Fetching today's games...")
+    requested_date = date_override or get_eastern_date()
+    print(f"\n🏀 Fetching games for {requested_date}...")
     if manual_games:
         todays_games = manual_games
         # Normalize keys: allow either 'home_team_id' or 'home_id'
@@ -168,14 +170,19 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
         all_finished = False
         print(f"   Using manual override with {len(todays_games)} game(s)")
     else:
-        todays_games, game_date, all_finished = get_todays_games(date_str=date_override)
+        try:
+            todays_games, game_date, all_finished = get_todays_games(date_str=date_override)
+        except ScheduleUnavailableError as error:
+            print(f"\n❌ Schedule unavailable for {requested_date}.")
+            print(f"   {error}")
+            print("   Retry later or supply confirmed fixtures with --manual-games.")
+            return
     eastern_today = get_eastern_date()
     print(f"   Game date from API: {game_date}")
     print(f"   Current date (Eastern): {eastern_today}")
     
     if len(todays_games) == 0:
-        print("\n❌ No games found for today.")
-        print("   The NBA schedule might be empty, or it's the off-season.")
+        print(f"\nNo games scheduled for {game_date} in the retrieved NBA schedule.")
         return
     
     # Warn if showing old games

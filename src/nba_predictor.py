@@ -17,10 +17,8 @@ Note: First run will take time to fetch data. Data is cached for subsequent runs
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import warnings
 import pickle
 import os
-warnings.filterwarnings('ignore')
 
 # Parallel processing
 from joblib import Parallel, delayed
@@ -34,6 +32,8 @@ from nba_api.stats.static import teams
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
 
 # ML imports
+# Configure compatibility notices before TensorFlow/Keras is first imported.
+from .utils import configure_gpu
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import tensorflow as tf
@@ -58,10 +58,9 @@ class SumPooling1D(layers.Layer):
 
 # Path configuration
 from .paths import FEATURE_CACHE_FILE, MATCHUP_CACHE_FILE, ENRICHED_GAMES_CSV, MATCHUPS_CSV, get_model_path
-from .utils import configure_gpu
 
 # Configure GPU at import time
-GPU_AVAILABLE = configure_gpu()
+GPU_AVAILABLE = configure_gpu(verbose=False)
 
 # Visualization
 import matplotlib.pyplot as plt

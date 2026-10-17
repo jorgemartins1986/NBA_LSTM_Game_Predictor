@@ -62,6 +62,90 @@ _HTTPS_HANDLER = urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
 _OPENER = urllib.request.build_opener(_HTTPS_HANDLER)
 
 
+class ScheduleUnavailableError(RuntimeError):
+    """No source could establish the requested date's NBA schedule."""
+
+
+def _schedule_date(value) -> Optional[str]:
+    """Read the NBA's Eastern calendar dates without shifting midnight to UTC."""
+    if not isinstance(value, str):
+        return None
+    for pattern in ('%Y-%m-%d', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(value, pattern).strftime('%Y-%m-%d')
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00')).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _fetch_static_schedule(date_str: str, timeout: int = 10) -> list:
+    """Fetch scheduled fixtures, including future dates, from official NBA hosts.
+
+    An empty result requires a matching date block or a date inside the
+    published calendar. A failed/stale/unrecognizable feed is not an empty day.
+    """
+    sources = (
+        'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json',
+        'https://nba-prod-us-east-1-mediaops-stats.s3.amazonaws.com/NBA/staticData/scheduleLeagueV2_1.json',
+    )
+    errors = []
+    for url in sources:
+        try:
+            request = urllib.request.Request(url, headers=_NBA_CDN_HEADERS)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read()
+                if response.headers.get('Content-Encoding') == 'gzip':
+                    body = gzip.decompress(body)
+            payload = json.loads(body)
+            blocks = payload['leagueSchedule']['gameDates']
+            if not isinstance(blocks, list):
+                raise ValueError('Invalid schedule calendar')
+            games, published_dates = [], []
+            matched_date = False
+            for block in blocks:
+                block_date = _schedule_date(block.get('gameDate'))
+                if block_date:
+                    published_dates.append(block_date)
+                    matched_date |= block_date == date_str
+                for game in block['games']:
+                    game_date = (_schedule_date(game.get('gameDateEst')) or
+                                 _schedule_date(game.get('gameDateTimeEst')) or block_date)
+                    if not game_date and game.get('gameDateTimeUTC'):
+                        game_date = datetime.fromisoformat(
+                            game['gameDateTimeUTC'].replace('Z', '+00:00')).astimezone(
+                                ZoneInfo('America/New_York')).date().isoformat()
+                    if not game_date:
+                        raise ValueError('Schedule game has no usable Eastern date')
+                    published_dates.append(game_date)
+                    if game_date != date_str:
+                        continue
+                    matched_date = True
+                    status = game.get('gameStatusText') or {
+                        1: 'Scheduled', 2: 'In Progress', 3: 'Final'}.get(game.get('gameStatus'), 'Scheduled')
+                    games.append({
+                        'game_id': game['gameId'],
+                        'home_team_id': _team_id(game.get('homeTeam', {}).get('teamId')),
+                        'away_team_id': _team_id(game.get('awayTeam', {}).get('teamId')),
+                        'game_status': status,
+                    })
+            if matched_date or (published_dates and min(published_dates) <= date_str <= max(published_dates)):
+                return games
+            raise ValueError(f'{date_str} is outside the published schedule')
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            errors.append(f'{type(error).__name__}: {error}')
+    raise ScheduleUnavailableError(f'NBA schedule unavailable for {date_str}. ' + '; '.join(errors))
+
+
+def _team_id(value):
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _fetch_nba_stats(endpoint: str, params: dict, timeout: int = 30, retries: int = 3) -> dict:
     """Fetch data from stats.nba.com using urllib (bypasses CDN blocking of requests/urllib3).
     
@@ -169,51 +253,7 @@ def _fetch_cdn_scoreboard(date_str: str, timeout: int = 10) -> list:
         if games:
             return games
             
-    # Try the static schedule JSON if live scoreboard has not rolled over
-    try:
-        url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json"
-        req = urllib.request.Request(url, headers=_NBA_CDN_HEADERS)
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        data = resp.read()
-        encoding = resp.headers.get('Content-Encoding', '')
-        if encoding == 'gzip':
-            data = gzip.decompress(data)
-        j = json.loads(data)
-        
-        schedule_games = []
-        league_schedule = j.get('leagueSchedule', {})
-        for date_block in league_schedule.get('gameDates', []):
-            for g in date_block.get('games', []):
-                # g_date is like "2026-05-09T00:00:00Z"
-                g_date = g.get('gameDateEst', '')
-                if g_date.startswith(date_str):
-                    gid = g.get('gameId')
-                    home = g.get('homeTeam', {}).get('teamId')
-                    away = g.get('awayTeam', {}).get('teamId')
-                    status = g.get('gameStatusText') or g.get('gameStatus', 'Scheduled')
-                    
-                    try:
-                        home_id = int(home) if home is not None else None
-                    except Exception:
-                        home_id = None
-                    try:
-                        away_id = int(away) if away is not None else None
-                    except Exception:
-                        away_id = None
-                    
-                    schedule_games.append({
-                        'game_id': gid,
-                        'home_team_id': home_id,
-                        'away_team_id': away_id,
-                        'game_status': status or 'Scheduled'
-                    })
-        
-        if schedule_games:
-            return schedule_games
-    except Exception:
-        pass
-
-    return []
+    return _fetch_static_schedule(date_str, timeout)
 
 
 def get_eastern_date() -> str:
@@ -309,8 +349,9 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
     Returns:
         tuple: (list of games, game_date string in YYYY-MM-DD format, all_finished bool)
         
-    Uses ScoreboardV2 (stats API) which shows scheduled games for today,
-    with live scoreboard as fallback for game status.
+    Future dates use the official full-season schedule. Today/past dates also
+    use live/stats sources. Raises ScheduleUnavailableError when every schedule
+    source fails; an empty list means a source confirmed an empty date.
     """
     import time
     from nba_api.live.nba.endpoints import scoreboard
@@ -319,29 +360,37 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
     game_date_str = date_str or get_eastern_date()
     all_teams_list = teams.get_teams()
     team_id_to_info = {t['id']: t for t in all_teams_list}
+    schedule_available = False
+
+    def cdn_result(rows, source):
+        games = [{**game,
+                  'home_team': team_id_to_info.get(game.get('home_team_id'), {}).get(
+                      'nickname', str(game.get('home_team_id'))),
+                  'away_team': team_id_to_info.get(game.get('away_team_id'), {}).get(
+                      'nickname', str(game.get('away_team_id')))} for game in rows]
+        if verbose:
+            print(f'   Result source: {source}')
+        finished = bool(games) and all(str(g.get('game_status', '')).startswith('Final') for g in games)
+        return games, game_date_str, finished
+
+    def empty_result():
+        if not schedule_available:
+            raise ScheduleUnavailableError(
+                f'Could not retrieve the NBA schedule for {game_date_str}; '
+                'the schedule sources failed. This does not establish that no games are scheduled.')
+        return [], game_date_str, False
+
+    # Results endpoints cannot establish a future fixture list. The season
+    # schedule also avoids trying today's live feed for a different date.
+    if game_date_str > get_eastern_date():
+        return cdn_result(_fetch_static_schedule(game_date_str), 'NBA season schedule')
 
     # Fast path: CDN scoreboard JSON (often available even when stats endpoints lag)
     try:
         cdn_games = _fetch_cdn_scoreboard(game_date_str)
+        schedule_available = True
         if cdn_games:
-            today_games = []
-            for g in cdn_games:
-                home_id = g.get('home_team_id')
-                away_id = g.get('away_team_id')
-                home_info = team_id_to_info.get(home_id, {})
-                away_info = team_id_to_info.get(away_id, {})
-                status = g.get('game_status', 'Scheduled')
-                today_games.append({
-                    'game_id': g.get('game_id'),
-                    'home_team': home_info.get('nickname', str(home_id)),
-                    'away_team': away_info.get('nickname', str(away_id)),
-                    'home_team_id': home_id,
-                    'away_team_id': away_id,
-                    'game_status': status,
-                })
-            if verbose:
-                print("   Result source: NBA CDN JSON")
-            return today_games, game_date_str, False
+            return cdn_result(cdn_games, 'NBA CDN JSON')
     except Exception:
         pass
     
@@ -361,6 +410,8 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
                 from nba_api.stats.endpoints import scoreboardv2
                 sb = scoreboardv2.ScoreboardV2(game_date=game_date_str, timeout=10)
                 games_df = sb.get_data_frames()[0]
+                if games_df is not None and len(games_df) == 0:
+                    schedule_available = True
                 break
             except Exception as fallback_err:
                 if verbose:
@@ -446,30 +497,13 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
                         # Try CDN JSON before giving up
                         try:
                             cdn_games = _fetch_cdn_scoreboard(game_date_str)
+                            schedule_available = True
                             if cdn_games:
-                                today_games = []
-                                team_id_to_info = {t['id']: t for t in teams.get_teams()}
-                                for g in cdn_games:
-                                    home_id = g.get('home_team_id')
-                                    away_id = g.get('away_team_id')
-                                    home_info = team_id_to_info.get(home_id, {})
-                                    away_info = team_id_to_info.get(away_id, {})
-                                    status = g.get('game_status', 'Scheduled')
-                                    today_games.append({
-                                        'game_id': g.get('game_id'),
-                                        'home_team': home_info.get('nickname', str(home_id)),
-                                        'away_team': away_info.get('nickname', str(away_id)),
-                                        'home_team_id': home_id,
-                                        'away_team_id': away_id,
-                                        'game_status': status,
-                                    })
-                                if verbose:
-                                    print(f"   Result source: NBA CDN JSON")
-                                return today_games, game_date_str, False
+                                return cdn_result(cdn_games, 'NBA CDN JSON')
                         except Exception:
                             pass
 
-                        return [], game_date_str, False
+                        return empty_result()
 
                 # leaguegamefinder returns one row per team per game; group by GAME_ID
                 today_games = []
@@ -501,10 +535,12 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
                 # If we built games from leaguegamefinder, return them
                 if len(today_games) > 0:
                     return today_games, game_date_str, False
+            except ScheduleUnavailableError:
+                raise
             except Exception:
                 if verbose:
                     print("   leaguegamefinder fallback raised an exception")
-                return [], game_date_str, False
+                return empty_result()
         
         # IMPORTANT: NBA API sometimes returns duplicate rows - deduplicate by GAME_ID
         games_df = games_df.drop_duplicates(subset=['GAME_ID'], keep='first')
@@ -615,35 +651,20 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
         # As a final attempt, try the NBA CDN JSON
         try:
             cdn_games = _fetch_cdn_scoreboard(game_date_str)
+            schedule_available = True
             if cdn_games:
-                today_games = []
-                team_id_to_info = {t['id']: t for t in teams.get_teams()}
-                for g in cdn_games:
-                    home_id = g.get('home_team_id')
-                    away_id = g.get('away_team_id')
-                    home_info = team_id_to_info.get(home_id, {})
-                    away_info = team_id_to_info.get(away_id, {})
-                    status = g.get('game_status', 'Scheduled')
-                    today_games.append({
-                        'game_id': g.get('game_id'),
-                        'home_team': home_info.get('nickname', str(home_id)),
-                        'away_team': away_info.get('nickname', str(away_id)),
-                        'home_team_id': home_id,
-                        'away_team_id': away_id,
-                        'game_status': status,
-                    })
-                if verbose:
-                    print(f"   Result source: NBA CDN JSON")
-                return today_games, game_date_str, False
+                return cdn_result(cdn_games, 'NBA CDN JSON')
         except Exception:
             pass
 
-        return today_games, game_date_str, all_finished
+        return empty_result()
         
+    except ScheduleUnavailableError:
+        raise
     except Exception as e:
         if verbose:
             print(f"   Error fetching games: {e}")
-        return [], game_date_str, False
+        raise ScheduleUnavailableError(f'Could not retrieve NBA games for {game_date_str}: {e}') from e
 
 
 def fetch_season_games(season: str = None, verbose: bool = True) -> pd.DataFrame:

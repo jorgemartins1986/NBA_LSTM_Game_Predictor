@@ -11,6 +11,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from predict import filter_regular_games
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 
 # --- Fixtures ---
@@ -25,6 +27,37 @@ FAKE_TEAMS = [
 def _game(home_id, away_id, **extra):
     """Helper to build a minimal game dict."""
     return {'home_team_id': home_id, 'away_team_id': away_id, **extra}
+
+
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_cli_distinguishes_empty_schedule_from_failed_lookup(monkeypatch, capsys, unavailable):
+    import predict
+    from src.nba_data_manager import NBADataManager
+    from src.prediction import ScheduleUnavailableError
+
+    monkeypatch.setattr(predict, 'ModelLoader', lambda: SimpleNamespace(load_ensemble=lambda **_: None))
+    monkeypatch.setattr(predict, 'PredictionPipeline', lambda _: None)
+    monkeypatch.setattr(NBADataManager, 'update_current_season', lambda _: None)
+    monkeypatch.setattr(predict, 'fetch_season_games', lambda **_: None)
+    monkeypatch.setattr(predict, 'get_eastern_date', lambda: '2026-10-17')
+    lookup = Mock(return_value=([], '2026-10-20', False))
+    if unavailable:
+        lookup.side_effect = ScheduleUnavailableError('All schedule sources failed')
+    monkeypatch.setattr(predict, 'get_todays_games', lookup)
+    save = Mock()
+    monkeypatch.setattr(predict, 'save_predictions_to_history', save)
+    predict.predict_todays_games(date_override='2026-10-20')
+    output = capsys.readouterr().out
+    assert 'Fetching games for 2026-10-20' in output
+    assert 'off-season' not in output
+    if unavailable:
+        assert 'Schedule unavailable for 2026-10-20' in output
+        assert 'No games scheduled' not in output
+        assert '--manual-games' in output
+    else:
+        assert 'No games scheduled for 2026-10-20' in output
+        assert 'Schedule unavailable' not in output
+    save.assert_not_called()
 
 
 # --- Tests ---

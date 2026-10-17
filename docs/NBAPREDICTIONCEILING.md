@@ -208,7 +208,7 @@ current production claim without a corresponding independent sample.
 
 ## Accuracy, software coverage, and ROI
 
-The latest verified software suite has 549 passing tests and 89.96% aggregate
+The latest verified software suite has 568 passing tests and 90.43% aggregate
 line coverage in `.coveragerc`'s scope, with an enforced 85% coverage-run minimum.
 That checks software paths; it does not measure or guarantee NBA prediction accuracy.
 Legacy scripts, GPU utilities, and package initializers remain excluded.

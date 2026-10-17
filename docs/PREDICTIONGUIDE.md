@@ -217,12 +217,13 @@ model files. The interface does not train models or settle prediction results.
 | A model is skipped during loading | Check its filename and library compatibility. A partial model set can also be incompatible with saved stacking artifacts. |
 | Training cannot create five periods | Check for missing/invalid dates or game IDs, sufficient distinct dates, and both outcomes in each fitting period. |
 | Saving rejects `ensemble_weights.pkl` | Archive/remove old custom weights before saving the new equal-weight ensemble; validate replacement weights separately. |
-| No games | Check target date, NBA schedule, API availability, and whether IDs correspond to franchises. Manual input overrides only the schedule. |
+| Schedule unavailable | The NBA schedule sources failed or do not cover the requested date. Retry later or use confirmed fixtures with `--manual-games`; this does not mean the date has no games. Future dates use the full-season schedule with an official S3 fallback. |
+| No games scheduled | A retrieved schedule confirms an empty date. Check the requested Eastern date. Manual input overrides only the schedule. |
 | Not enough history | Check season, cache freshness, preseason flag, and carryover setting. Twenty is the window size, not the minimum number required to attempt inference. |
 | Stale web predictions | Refresh raw season data and restart the service if models changed. |
 | Cache rebuild message | Let feature generation rebuild a legacy/incompatible cache. The raw game cache need not be deleted. |
 | Old records or feature formulas corrected | Explicitly rebuild derived caches; their compatibility header does not fingerprint every source row or code change. |
-| No GPU detected | CPU execution is supported; verify platform/build support separately if GPU acceleration is needed. |
+| TensorFlow uses CPU despite an installed GPU | Native Windows TensorFlow 2.11+ lacks CUDA support. Modern GPU use requires a compatible WSL2/Linux environment; hardware presence alone does not enable it. This affects execution speed, not the temporal split. |
 | Garbled console symbols | Try UTF-8 mode, for example `python -X utf8 -m main predict`, and a UTF-8-capable terminal. |
 | Low reported accuracy | Distinguish developmental scores from final holdout metrics; check sample, input features, dates, model manifest, and training/live differences. Older artifacts can retain the earlier validation reuse. |
 

@@ -9,6 +9,7 @@ from .features import FeatureComputer, GameFeatures
 from .pipeline import PredictionPipeline, PredictionResult
 from .loader import ModelLoader, LoadedEnsemble
 from .nba_data import (
+    ScheduleUnavailableError,
     get_eastern_date,
     get_current_season,
     get_live_standings,
@@ -30,6 +31,7 @@ __all__ = [
     'ModelLoader',
     'LoadedEnsemble',
     # NBA data
+    'ScheduleUnavailableError',
     'get_eastern_date',
     'get_current_season',
     'get_live_standings',

@@ -64,6 +64,9 @@ array of objects with `home_team_id`, `away_team_id`, `game_status`, and optiona
 
 A date override does not turn the CLI into a historical backtester: standings
 and odds are fetched live, and the active season remains configuration-driven.
+Future dates use the official NBA season schedule, with its S3 host as a fallback
+when the CDN is blocked. An unavailable schedule is reported separately from a
+confirmed empty date. Future picks use information available at prediction time.
 
 ## Season and early-season history
 
@@ -249,6 +252,12 @@ $env:TF_CPP_MIN_LOG_LEVEL = "0"
 
 This logging setting does not disable oneDNN optimizations. CPU fallback is
 supported; GPU detection depends on the installed TensorFlow build and platform.
+Prediction startup omits routine device announcements and two known Keras
+compatibility notices (the ONNX-export NumPy alias probe and the internal
+`tf.placeholder` deprecation). Other warnings and errors remain visible.
+Native Windows TensorFlow 2.11+ does not support CUDA GPU execution; the GPU
+hardware can be present while TensorFlow runs on CPU. Modern TensorFlow GPU
+support on Windows uses [WSL2](https://www.tensorflow.org/install/pip).
 
 ## Prediction history and results
 
@@ -310,7 +319,7 @@ written only inside a disposable container do not persist after removal.
 
 ## Tests and coverage
 
-Latest verified suite: **549 passed**, **89.96% line coverage**. Coverage runs
+Latest verified suite: **568 passed**, **90.43% line coverage**. Coverage runs
 require at least **85%** under `.coveragerc`:
 
 ```powershell

@@ -8,6 +8,7 @@ Separated from prediction logic for testability.
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import pickle
+import os
 
 
 @dataclass  
@@ -67,11 +68,12 @@ class ModelLoader:
     
     def _load_keras_model(self, path: str) -> Any:
         """Load a Keras model with custom objects"""
+        # Apply before TensorFlow's first import; preserve explicit user settings.
+        os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '1')
+        # This also sets up the narrow compatibility-warning filters before TF.
+        from ..nba_predictor import SumPooling1D
         import tensorflow as tf
         from tensorflow import keras
-        
-        # Import custom layer
-        from ..nba_predictor import SumPooling1D
         
         custom_objects = {
             'SumPooling1D': SumPooling1D,

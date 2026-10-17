@@ -3,7 +3,7 @@
 import gzip
 import json
 import urllib.error
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 
 import pandas as pd
 import pytest
@@ -13,8 +13,10 @@ from src.prediction import nba_data as data
 
 def response(payload, compressed=False):
     body = json.dumps(payload).encode()
-    return Mock(read=Mock(return_value=gzip.compress(body) if compressed else body),
-                headers={"Content-Encoding": "gzip" if compressed else "identity"})
+    result = MagicMock(read=Mock(return_value=gzip.compress(body) if compressed else body),
+                       headers={"Content-Encoding": "gzip" if compressed else "identity"})
+    result.__enter__.return_value = result
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +24,7 @@ def offline(monkeypatch):
     # Fail immediately if a test accidentally reaches an unconfigured endpoint.
     monkeypatch.setattr(data.urllib.request, "urlopen", Mock(side_effect=AssertionError("unexpected HTTP")))
     monkeypatch.setattr("time.sleep", Mock())
+    monkeypatch.setattr(data, 'get_eastern_date', lambda: '2026-10-17')
 
 
 @pytest.mark.parametrize("compressed", [False, True])
@@ -103,8 +106,67 @@ def test_cdn_falls_back_to_static_schedule_and_filters_date(monkeypatch, compres
     assert fetch.call_count == 5
 
 
-def test_cdn_exhausted_sources_return_empty():
-    assert data._fetch_cdn_scoreboard("2026-10-17") == []
+def test_cdn_exhausted_sources_raise_unavailable(monkeypatch):
+    monkeypatch.setattr(data.urllib.request, 'urlopen', Mock(side_effect=TimeoutError('offline')))
+    with pytest.raises(data.ScheduleUnavailableError, match='unavailable.*2026-10-17'):
+        data._fetch_cdn_scoreboard('2026-10-17')
+
+
+@pytest.mark.parametrize('date_fields', [
+    {'gameDateEst': '10/20/2026 00:00:00'},
+    {'gameDateTimeEst': '2026-10-20T21:30:00'},
+    {'gameDateTimeUTC': '2026-10-21T01:30:00Z'},
+])
+def test_future_schedule_uses_official_s3_fallback_and_eastern_date(monkeypatch, date_fields):
+    payload = {'leagueSchedule': {'gameDates': [{'games': [
+        {'gameId': '0022600003', **date_fields, 'gameStatus': 1,
+         'homeTeam': {'teamId': '1610612759'}, 'awayTeam': {'teamId': '1610612760'}},
+        {'gameId': 'wrong-date', 'gameDateEst': '2026-10-21',
+         'homeTeam': {'teamId': 1}, 'awayTeam': {'teamId': 2}},
+    ]}]}}
+    denied = urllib.error.HTTPError('https://cdn.nba.com', 403, 'Forbidden', {}, None)
+    fetch = Mock(side_effect=[denied, response(payload, compressed=True)])
+    monkeypatch.setattr(data.urllib.request, 'urlopen', fetch)
+    stats = Mock(side_effect=AssertionError('future dates must not query results endpoints'))
+    monkeypatch.setattr('nba_api.stats.endpoints.scoreboardv2.ScoreboardV2', stats)
+    monkeypatch.setattr('nba_api.stats.endpoints.leaguegamefinder.LeagueGameFinder', stats)
+    games, date, finished = data.get_todays_games(date_str='2026-10-20', verbose=False)
+    assert date == '2026-10-20' and not finished
+    assert len(games) == 1
+    assert games[0]['game_id'] == '0022600003'
+    assert games[0]['home_team_id'] == 1610612759
+    assert games[0]['away_team_id'] == 1610612760
+    assert games[0]['home_team'] == 'Spurs'
+    assert games[0]['game_status'] == 'Scheduled'
+    assert 's3.amazonaws.com/NBA/staticData/' in fetch.call_args.args[0].full_url
+    assert fetch.call_count == 2
+    stats.assert_not_called()
+
+
+def test_future_empty_schedule_is_distinct_from_source_failure(monkeypatch):
+    payload = {'leagueSchedule': {'gameDates': [{'gameDate': '10/20/2026 00:00:00', 'games': []}]}}
+    monkeypatch.setattr(data.urllib.request, 'urlopen', Mock(return_value=response(payload)))
+    assert data.get_todays_games(date_str='2026-10-20', verbose=False) == ([], '2026-10-20', False)
+    monkeypatch.setattr(data.urllib.request, 'urlopen', Mock(side_effect=TimeoutError('offline')))
+    with pytest.raises(data.ScheduleUnavailableError, match='unavailable.*2026-10-20'):
+        data.get_todays_games(date_str='2026-10-20', verbose=False)
+
+
+@pytest.mark.parametrize('payload', [[], {}, {'leagueSchedule': {'gameDates': []}},
+    {'leagueSchedule': {'gameDates': [{'gameDate': '10/20/2025 00:00:00', 'games': []}]}},
+    {'leagueSchedule': {'gameDates': [{'games': [{'gameId': '001'}]}]}}])
+def test_stale_or_unrecognizable_schedule_is_not_an_empty_future_day(monkeypatch, payload):
+    monkeypatch.setattr(data.urllib.request, 'urlopen', Mock(return_value=response(payload)))
+    with pytest.raises(data.ScheduleUnavailableError):
+        data.get_todays_games(date_str='2026-10-20', verbose=False)
+
+
+def test_date_between_published_schedule_days_is_confirmed_empty(monkeypatch):
+    payload = {'leagueSchedule': {'gameDates': [
+        {'gameDate': '10/19/2026 00:00:00', 'games': []},
+        {'gameDate': '10/21/2026 00:00:00', 'games': []}]}}
+    monkeypatch.setattr(data.urllib.request, 'urlopen', Mock(return_value=response(payload)))
+    assert data._fetch_static_schedule('2026-10-20') == []
 
 
 @pytest.fixture
@@ -205,6 +267,22 @@ def test_schedule_rechecks_cdn_after_stats_sources_fail(schedule_sources):
     games, _, _ = data.get_todays_games(date_str="2026-10-17")
     assert games[0]["game_id"] == "late"
     assert cdn.call_count == 2
+
+
+def test_today_reports_unavailable_when_all_schedule_sources_fail(schedule_sources):
+    cdn, primary, fallback = schedule_sources
+    cdn.side_effect = data.ScheduleUnavailableError('offline')
+    primary.side_effect = TimeoutError()
+    fallback.side_effect = TimeoutError()
+    with pytest.raises(data.ScheduleUnavailableError, match='Could not retrieve.*2026-10-17'):
+        data.get_todays_games(date_str='2026-10-17', verbose=False)
+
+
+def test_cdn_final_status_is_respected(schedule_sources):
+    cdn, _, _ = schedule_sources
+    cdn.return_value = [{'game_id': '001', 'home_team_id': 100, 'away_team_id': 200,
+                         'game_status': 'Final/OT'}]
+    assert data.get_todays_games(date_str='2026-10-17', verbose=False)[2] is True
 
 
 def test_season_fetch_reports_both_failed_sources(monkeypatch):

@@ -9,6 +9,7 @@ from src.prediction.rolling_history import load_prediction_history, upcoming_tea
 from src.prediction.nba_data import get_current_season
 
 from src.prediction import (
+    ScheduleUnavailableError,
     ModelLoader,
     PredictionPipeline,
     fetch_season_games,
@@ -16,6 +17,7 @@ from src.prediction import (
     get_live_odds,
     get_live_standings,
     get_todays_games,
+    get_eastern_date,
     compute_head_to_head,
     match_game_to_odds,
     get_confidence_tier,
@@ -67,14 +69,20 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
     team_id_to_info = {team["id"]: team for team in all_teams}
 
     games_df = fetch_season_games(verbose=False)
-    todays_games, game_date, all_finished = get_todays_games(verbose=False)
+    try:
+        todays_games, game_date, all_finished = get_todays_games(verbose=False)
+    except ScheduleUnavailableError as error:
+        return {'game_date': get_eastern_date(), 'all_finished': False, 'single_model': single_model,
+                'num_games': 0, 'predictions': [], 'schedule_status': 'unavailable',
+                'skipped_reason': str(error)}
 
     if not todays_games:
         return {
             "game_date": game_date,
             "all_finished": all_finished,
             "predictions": [],
-            "skipped_reason": "No games found for today.",
+            "schedule_status": "available",
+            "skipped_reason": f"No games scheduled for {game_date} in the retrieved NBA schedule.",
         }
 
     active_season = get_current_season()

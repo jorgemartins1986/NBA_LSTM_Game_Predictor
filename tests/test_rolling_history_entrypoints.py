@@ -6,6 +6,26 @@ import pytest
 from tests.test_rolling_history import games
 
 
+def test_web_distinguishes_failed_lookup_from_empty_schedule(monkeypatch):
+    from src.web import predict_service as service
+    from src.prediction import ScheduleUnavailableError
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(service, '_load_pipeline', lambda _: None)
+    monkeypatch.setattr(service, 'fetch_season_games', lambda **_: pd.DataFrame())
+    monkeypatch.setattr(service, 'get_eastern_date', lambda: '2026-10-17')
+    monkeypatch.setattr(service, 'get_todays_games', Mock(side_effect=ScheduleUnavailableError('offline')))
+    result = service.run_todays_predictions()
+    assert result['game_date'] == '2026-10-17'
+    assert result['schedule_status'] == 'unavailable'
+    assert result['predictions'] == []
+    assert result['skipped_reason'] == 'offline'
+    monkeypatch.setattr(service, 'get_todays_games', lambda **_: ([], '2026-10-17', False))
+    result = service.run_todays_predictions()
+    assert result['schedule_status'] == 'available'
+    assert result['skipped_reason'] == 'No games scheduled for 2026-10-17 in the retrieved NBA schedule.'
+
+
 def test_web_prediction_exposes_history_counts_without_network(monkeypatch):
     from src.web import predict_service as service
     from src.prediction.features import FeatureComputer

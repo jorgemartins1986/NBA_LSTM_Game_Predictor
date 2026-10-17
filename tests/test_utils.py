@@ -7,6 +7,9 @@ Tests for shared utility functions.
 import pytest
 import os
 import sys
+import logging
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -52,3 +55,36 @@ class TestConfigureGpu:
         
         # Verify tensorflow is available
         assert hasattr(tf, 'config')
+
+    @pytest.mark.parametrize('has_gpu', [False, True])
+    def test_quiet_mode_preserves_device_configuration(self, monkeypatch, capsys, has_gpu):
+        from src import utils
+
+        device = SimpleNamespace(name='GPU:0')
+        monkeypatch.setattr(utils.tf.config, 'list_physical_devices', lambda _: [device] if has_gpu else [])
+        growth = Mock()
+        monkeypatch.setattr(utils.tf.config.experimental, 'set_memory_growth', growth)
+        assert utils.configure_gpu(verbose=False) is has_gpu
+        assert capsys.readouterr().out == ''
+        if has_gpu:
+            growth.assert_called_once_with(device, True)
+        else:
+            growth.assert_not_called()
+
+    def test_cpu_message_describes_tensorflow_build_instead_of_missing_hardware(self, monkeypatch, capsys):
+        from src import utils
+        monkeypatch.setattr(utils.tf.config, 'list_physical_devices', lambda _: [])
+        monkeypatch.setattr(utils.tf.test, 'is_built_with_cuda', lambda: False)
+        assert utils.configure_gpu() is False
+        assert 'this build has no CUDA support' in capsys.readouterr().out
+
+
+def test_known_deprecation_filter_preserves_other_warnings_and_errors():
+    from src.utils import _KerasPlaceholderNotice
+
+    notice = 'The name tf.placeholder is deprecated. Please use tf.compat.v1.placeholder instead.'
+    warning_filter = _KerasPlaceholderNotice()
+    record = lambda level, message: logging.LogRecord('tensorflow', level, '', 0, message, (), None)
+    assert not warning_filter.filter(record(logging.WARNING, notice))
+    assert warning_filter.filter(record(logging.ERROR, notice))
+    assert warning_filter.filter(record(logging.WARNING, 'Model weights could not be restored'))
