@@ -97,6 +97,11 @@ All paths are under `cache/`, as defined by `src/paths.py`:
 | `nba_games_enriched.csv` | Inspectable export of engineered team rows |
 | `nba_matchups.csv` | Inspectable matchup export, including the target |
 
+Training sorts matchup rows itself and creates five date-disjoint periods for
+base fitting, early stopping, stacking, calibration, and final evaluation.
+Unordered legacy caches do not need rebuilding just for this correction;
+existing models need retraining. See the [evaluation guide](NBAPREDICTIONCEILING.md).
+
 Raw records are team rows, usually two per game. Their row count is not the
 number of unique games. File sizes, row counts, and timing vary.
 

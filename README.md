@@ -108,21 +108,47 @@ Changing them does not retrain saved models.
    and calculate chronological ELO ratings.
 2. Build rolling team features and one row per valid home/away matchup. Rows
    without sufficient rolling history are removed from the training dataset.
-3. Split input row order 80/20 without shuffling; fit scalers on training data.
-4. Train XGBoost, Random Forest, Logistic Regression, and LSTM.
-5. Evaluate the base-model average, fit a stacking classifier and Platt calibrator,
-   then save model artifacts.
+3. Validate dates and game IDs, sort by calendar date and game ID, and create
+   five periods with no shared calendar dates.
+4. Train XGBoost, Random Forest, Logistic Regression, and LSTM, then fit stacking
+   and Platt calibration on separate later periods.
+5. Evaluate averaging, raw stacking, and calibrated stacking on the same final
+   holdout, then save models and a training manifest. Averaging remains the
+   deployed method; holdout results do not automatically select a method.
+
+| Period | Approximate share | Use |
+| --- | --- | --- |
+| Base training | 70% | Fit base models and scalers |
+| Early stopping | 10% | XGBoost/LSTM validation and developmental model scores |
+| Stacker fitting | 5% | Fit the stacking classifier |
+| Calibration | 5% | Fit the Platt calibrator |
+| Final holdout | 10% | Score the three already fitted methods only |
+
+Whole dates stay together, so exact counts vary. Fractions are configurable in
+`EnsembleConfig`; `test_size` is the final holdout fraction. All periods are
+prepared once before fitting, and later calls use that same data snapshot.
 
 Recency weights are passed to XGBoost, Random Forest, and LSTM. The Logistic
 Regression trainer currently fits without those weights. Random Forest selects
 up to 40 features and stores the selected indices with its model.
 
-The training split is reused for early stopping and for fitting/evaluating
-stacking and calibration. Printed scores are development results, not an
-independent final holdout. The final `Average Accuracy` is the mean of individual
-model accuracies, not the evaluated ensemble accuracy. Training prints metrics;
-the current entry point does not automatically call the separate
-`save_classification_reports` exporter, so a new timestamped report is not guaranteed.
+The split is enforced at training time, so unordered legacy caches do not need
+rebuilding to benefit. Missing/invalid dates, missing/duplicate supplied game IDs,
+or insufficient dates/classes for the fitting periods cause an error. Training
+prints the date ranges. Existing saved models must be retrained to use these
+corrections; changing code does not rewrite model files or old reported scores.
+
+Individual model scores printed during fitting describe early-stopping data,
+not the final holdout. The final summary reports the accuracy of averaged
+predictions. A final comparison table shows each individual model and all three
+ensemble methods on the same games, including correct/game counts, accuracy,
+Brier score, and log loss. It also distinguishes the mean of individual
+accuracies from the accuracy of averaged predictions. The metrics are saved in
+`models/ensemble_training_manifest.json`, together with
+period dates/counts, an input fingerprint, configuration, package versions, and
+artifact hashes. The separate timestamped classification-report exporter is
+not automatically called. Repeated tuning against the final period would still
+invalidate it as an independent evaluation.
 
 Default trainer settings live in `src/training/trainers.py`. The standard entry
 point does not read `config/best_xgb_params.json` automatically.
@@ -152,10 +178,12 @@ With the default model order, training writes these files under `models/`:
 | `ensemble_model_types.pkl` | Model types in saved order |
 | `ensemble_stack_meta_lr.pkl` | Stacking classifier |
 | `ensemble_stack_platt.pkl` | Platt calibrator |
+| `ensemble_training_manifest.json` | Training periods, fingerprints, configuration, final metrics |
 
 The loader can also read optional `ensemble_weights.pkl` with `weights` and
-`threshold`. Standard training does not create or refresh that file. Check any
-existing weights/threshold against a newly trained model set.
+`threshold`. Standard training does not create or refresh that file and refuses
+to save over a directory containing it: archive/remove the old weights first,
+and validate any replacement separately against the new model set.
 
 Displayed home probability is the base-model probability average, weighted when
 compatible optional weights exist. The winner is HOME when that probability is
@@ -282,7 +310,7 @@ written only inside a disposable container do not persist after removal.
 
 ## Tests and coverage
 
-Latest verified suite: **502 passed**, **88.11% line coverage**. Coverage runs
+Latest verified suite: **549 passed**, **89.96% line coverage**. Coverage runs
 require at least **85%** under `.coveragerc`:
 
 ```powershell
@@ -305,6 +333,7 @@ offline mocks, not a check that live NBA endpoints currently work.
 | --- | --- |
 | `main.py`, `train.py`, `predict.py` | CLI entry points |
 | `src/training/` | Data preparation, trainers, ensemble evaluation |
+| `src/training/partitions.py` | Five chronological training/evaluation periods |
 | `src/prediction/` | Model loading, feature vectors, NBA/odds inputs, history |
 | `src/feature_engineering.py` | Rolling team calculations and worker function |
 | `src/dataframe_cache.py` | Versioned feature/matchup cache I/O |

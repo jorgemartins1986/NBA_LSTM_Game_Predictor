@@ -21,7 +21,8 @@ def sample_matchup_df():
     np.random.seed(42)
     n = 100
     return pd.DataFrame({
-        'HOME_WIN': np.random.randint(0, 2, n),
+        'GAME_DATE': pd.date_range('2024-01-01', periods=n),
+        'HOME_WIN': np.arange(n) % 2,
         'HOME_ELO': np.random.uniform(1400, 1600, n),
         'AWAY_ELO': np.random.uniform(1400, 1600, n),
         'HOME_WIN_PCT': np.random.uniform(0.3, 0.7, n),
@@ -71,7 +72,7 @@ class TestEnsembleConfig:
     
     def test_default_test_size(self):
         config = EnsembleConfig()
-        assert config.test_size == 0.2
+        assert config.test_size == 0.1
     
     def test_custom_architectures(self):
         config = EnsembleConfig(architectures=['xgboost', 'logistic'])
@@ -281,18 +282,12 @@ class TestEnsembleTrainerIntegration:
     def test_train_full_ensemble_with_mock_factory(self, sample_matchup_df):
         """Test full ensemble training with mocked components"""
         # Mock data prep
-        mock_data_prep = MagicMock()
-        mock_train_test = MagicMock()
-        mock_train_test.n_train_samples = 80
-        mock_train_test.n_test_samples = 20
-        mock_train_test.y_train = np.zeros(80)
-        mock_train_test.X_test = np.zeros((20, 10))
-        mock_data_prep.prepare_for_training.return_value = (mock_train_test, ['f1', 'f2'])
-        
+        from src.training.data_prep import DataPreparation
+        mock_data_prep = DataPreparation(test_size=.1)
         mock_scaled = MagicMock()
         mock_scaled.X_train_scaled = np.zeros((80, 10))
         mock_scaled.X_test_scaled = np.zeros((20, 10))
-        mock_data_prep.scale_features.return_value = mock_scaled
+        mock_data_prep.scale_features = Mock(return_value=mock_scaled)
         
         # Mock trainer factory
         mock_factory = MagicMock()
@@ -395,99 +390,20 @@ class TestEnsembleTrainerSave:
 
 
 class TestEnsembleTrainerEvaluate:
-    """Tests for EnsembleTrainer.evaluate() method"""
-    
     def test_evaluate_ensemble(self, sample_matchup_df):
-        """Test ensemble evaluation"""
-        # Mock data prep
-        mock_data_prep = MagicMock()
-        mock_train_test = MagicMock()
-        mock_train_test.X_test = np.random.randn(20, 10)
-        mock_train_test.y_test = np.random.randint(0, 2, 20)
-        mock_data_prep.prepare_for_training.return_value = (mock_train_test, ['f1'])
-        
-        # Mock trainer factory
-        mock_factory = MagicMock()
-        mock_trainer = MagicMock()
-        mock_trainer.predict_proba.return_value = np.random.uniform(0.3, 0.7, 20)
-        mock_factory.create.return_value = mock_trainer
-        
-        # Mock evaluator
-        mock_evaluator = MagicMock()
-        mock_eval_result = MagicMock()
-        mock_eval_result.accuracy = 0.65
-        mock_eval_result.classification_report = "Classification Report"
-        mock_evaluator.evaluate_ensemble.return_value = mock_eval_result
-        
-        trainer = EnsembleTrainer(
-            config=EnsembleConfig(verbose=False),
-            trainer_factory=mock_factory,
-            data_prep=mock_data_prep,
-            evaluator=mock_evaluator
-        )
-        
-        # Create result to evaluate
-        mock_scaler = MagicMock()
-        mock_scaler.transform.return_value = np.random.randn(20, 10)
-        
-        ensemble_result = EnsembleResult(
-            models=[MagicMock(), MagicMock()],
-            scalers=[mock_scaler, mock_scaler],
-            feature_cols=['f1'],
-            model_types=['xgboost', 'logistic'],
-            training_results=[]
-        )
-        
-        eval_result = trainer.evaluate(ensemble_result, sample_matchup_df)
-        
-        assert eval_result.accuracy == 0.65
-        mock_evaluator.evaluate_ensemble.assert_called_once()
-    
+        trainer = EnsembleTrainer(EnsembleConfig(architectures=['logistic'], verbose=False))
+        result = trainer.train(sample_matchup_df)
+        trainer.train_stacking(result)
+        evaluated = trainer.evaluate(result)
+        assert len(evaluated.y_true) == len(result.partitions.final_test.y)
+        assert result.ensemble_accuracy == evaluated.accuracy
+        assert set(result.final_evaluations) == {'average', 'stacking', 'calibrated_stacking'}
+
     def test_evaluate_logs_accuracy(self, sample_matchup_df):
-        """Test that evaluation logs accuracy"""
         captured = []
-        
-        # Mock data prep
-        mock_data_prep = MagicMock()
-        mock_train_test = MagicMock()
-        mock_train_test.X_test = np.random.randn(20, 10)
-        mock_train_test.y_test = np.random.randint(0, 2, 20)
-        mock_data_prep.prepare_for_training.return_value = (mock_train_test, ['f1'])
-        
-        # Mock trainer factory
-        mock_factory = MagicMock()
-        mock_trainer = MagicMock()
-        mock_trainer.predict_proba.return_value = np.random.uniform(0.3, 0.7, 20)
-        mock_factory.create.return_value = mock_trainer
-        
-        # Mock evaluator
-        mock_evaluator = MagicMock()
-        mock_eval_result = MagicMock()
-        mock_eval_result.accuracy = 0.65
-        mock_eval_result.classification_report = "Report"
-        mock_evaluator.evaluate_ensemble.return_value = mock_eval_result
-        
-        trainer = EnsembleTrainer(
-            config=EnsembleConfig(verbose=True),
-            trainer_factory=mock_factory,
-            data_prep=mock_data_prep,
-            evaluator=mock_evaluator,
-            print_fn=lambda x: captured.append(x)
-        )
-        
-        # Create result to evaluate
-        mock_scaler = MagicMock()
-        mock_scaler.transform.return_value = np.random.randn(20, 10)
-        
-        ensemble_result = EnsembleResult(
-            models=[MagicMock()],
-            scalers=[mock_scaler],
-            feature_cols=['f1'],
-            model_types=['xgboost'],
-            training_results=[]
-        )
-        
-        trainer.evaluate(ensemble_result, sample_matchup_df)
-        
-        # Check that accuracy was logged
-        assert any('ENSEMBLE ACCURACY' in msg or 'EVALUATING' in msg for msg in captured)
+        trainer = EnsembleTrainer(EnsembleConfig(architectures=['logistic'], verbose=True), print_fn=captured.append)
+        result = trainer.train(sample_matchup_df)
+        trainer.train_stacking(result)
+        assert not any('Averaging ensemble' in item for item in captured)
+        trainer.evaluate(result)
+        assert any('Averaging ensemble' in item for item in captured)

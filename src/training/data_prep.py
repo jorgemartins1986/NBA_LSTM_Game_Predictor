@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 
@@ -21,6 +20,8 @@ class TrainTestData:
     y_train: np.ndarray
     y_test: np.ndarray
     feature_cols: List[str]
+    train_dates: Optional[np.ndarray] = None
+    test_dates: Optional[np.ndarray] = None
     
     @property
     def n_features(self) -> int:
@@ -50,7 +51,7 @@ class DataPreparation:
     Handles all data preparation for model training.
     
     Design decisions:
-    - Chronological split (shuffle=False) to prevent temporal leakage
+    - Explicit date ordering and disjoint calendar dates at the split
     - Sample weights decay for recency weighting
     - Pure functions where possible for testability
     """
@@ -66,6 +67,8 @@ class DataPreparation:
             test_size: Fraction of data to use for testing (default 0.2)
             random_state: Random seed for reproducibility
         """
+        if not 0 < test_size < 1:
+            raise ValueError("test_size must be between 0 and 1")
         self.test_size = test_size
         self.random_state = random_state
     
@@ -106,32 +109,65 @@ class DataPreparation:
         
         return X, y
     
-    def chronological_split(self, X: np.ndarray, y: np.ndarray) -> TrainTestData:
+    def chronological_split(self, X: np.ndarray, y: np.ndarray,
+                            game_dates, game_ids=None) -> TrainTestData:
         """
         Split data chronologically (older games train, newer test).
         
-        Uses shuffle=False to prevent temporal leakage - this is critical
-        for time-series data like NBA games.
+        Sort features and labels together by GAME_DATE (then GAME_ID when
+        available). Move the entire boundary date into the later partition.
+        The requested test fraction is approximate when dates contain many games.
+        Dates are required: row order alone cannot establish chronology.
         
         Args:
             X: Feature array
             y: Label array
+            game_dates: One valid date per row; timestamps are grouped by day.
+            game_ids: Optional IDs for deterministic ordering within a date.
             
         Returns:
             TrainTestData with train/test splits
         """
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, 
-            test_size=self.test_size, 
-            shuffle=False  # CRITICAL: chronological split
-        )
+        X, y = np.asarray(X), np.asarray(y)
+        if len(X) != len(y) or len(X) != len(game_dates):
+            raise ValueError("Features, labels, and GAME_DATE must have matching lengths")
+        if len(X) < 2:
+            raise ValueError("At least two games on distinct dates are required")
+        raw_dates = pd.Series(np.asarray(game_dates))
+        if any(isinstance(value, (int, float, np.number)) for value in raw_dates):
+            raise ValueError("GAME_DATE must contain dates, not numeric timestamps")
+        dates = pd.to_datetime(raw_dates, format='mixed', errors='coerce').dt.normalize()
+        if dates.isna().any():
+            raise ValueError("GAME_DATE contains missing or invalid dates")
+        order_frame = pd.DataFrame({'date': dates, 'position': np.arange(len(X))})
+        sort_keys = ['date']
+        if game_ids is not None:
+            if len(game_ids) != len(X):
+                raise ValueError("GAME_ID must have one value per game")
+            ids = pd.Series(np.asarray(game_ids))
+            if ids.isna().any() or ids.astype(str).duplicated().any():
+                raise ValueError("GAME_ID must be nonmissing and unique")
+            order_frame['game_id'] = ids.astype(str)
+            sort_keys.append('game_id')
+        order = order_frame.sort_values(sort_keys, kind='stable')['position'].to_numpy()
+        ordered_dates = dates.iloc[order].to_numpy()
+        requested_train = len(X) - int(np.ceil(len(X) * self.test_size))
+        if requested_train < 1:
+            raise ValueError("test_size leaves no training games")
+        cutoff = ordered_dates[requested_train]
+        split_at = int((ordered_dates < cutoff).sum())
+        if split_at == 0:
+            raise ValueError("Cannot split into nonempty periods without sharing a GAME_DATE")
+        train_indices, test_indices = order[:split_at], order[split_at:]
         
         return TrainTestData(
-            X_train=X_train,
-            X_test=X_test,
-            y_train=y_train,
-            y_test=y_test,
-            feature_cols=[]  # Set by caller if needed
+            X_train=X[train_indices],
+            X_test=X[test_indices],
+            y_train=y[train_indices],
+            y_test=y[test_indices],
+            feature_cols=[],  # Set by caller if needed
+            train_dates=ordered_dates[:split_at],
+            test_dates=ordered_dates[split_at:]
         )
     
     def scale_features(self, data: TrainTestData) -> ScaledData:
@@ -195,7 +231,8 @@ class DataPreparation:
         """
         Complete data preparation pipeline.
         
-        Combines feature extraction, chronological split.
+        Requires valid GAME_DATE values and sorts even unordered cache inputs.
+        No calendar date is shared between the two resulting periods.
         Scaling is NOT included here as different models may need different scalers.
         
         Args:
@@ -204,10 +241,12 @@ class DataPreparation:
         Returns:
             Tuple of (TrainTestData, feature_cols list)
         """
+        validate_dataframe(df, required_cols=['GAME_DATE'])
         feature_cols = self.get_feature_columns(df)
         X, y = self.prepare_features(df, feature_cols)
         
-        data = self.chronological_split(X, y)
+        data = self.chronological_split(X, y, df['GAME_DATE'],
+                                        df['GAME_ID'] if 'GAME_ID' in df else None)
         data.feature_cols = feature_cols
         
         return data, feature_cols

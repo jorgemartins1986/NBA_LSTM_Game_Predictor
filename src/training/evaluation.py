@@ -21,6 +21,13 @@ class EvaluationResult:
     classification_report: str = ""
     individual_accuracies: Optional[List[float]] = None  # For ensemble
     model_names: Optional[List[str]] = None
+
+    def metrics(self) -> Dict[str, float]:
+        p = np.clip(self.y_pred_prob, 1e-7, 1 - 1e-7)
+        y = np.asarray(self.y_true)
+        return {'games': len(y), 'accuracy': float(self.accuracy),
+                'brier': float(np.mean((p - y) ** 2)),
+                'log_loss': float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))}
     
     @property
     def precision_away(self) -> Optional[float]:
@@ -73,7 +80,8 @@ class ModelEvaluator:
         """
         accuracy = accuracy_score(y_true, y_pred)
         report = classification_report(y_true, y_pred,
-                                       target_names=['Away Win', 'Home Win'])
+                                       labels=[0, 1], target_names=['Away Win', 'Home Win'],
+                                       zero_division=0)
         
         if y_pred_prob is None:
             y_pred_prob = y_pred.astype(float)

@@ -6,6 +6,7 @@ Designed for testability with dependency injection and single-responsibility cla
 """
 
 from .data_prep import DataPreparation, TrainTestData
+from .partitions import TrainingPeriod, TrainingPartitions, prepare_partitions
 from .trainers import (
     ModelTrainer,
     XGBoostTrainer,
@@ -20,6 +21,9 @@ from .evaluation import ModelEvaluator, EvaluationResult, save_classification_re
 __all__ = [
     'DataPreparation',
     'TrainTestData',
+    'TrainingPeriod',
+    'TrainingPartitions',
+    'prepare_partitions',
     'ModelTrainer',
     'XGBoostTrainer',
     'RandomForestTrainer',

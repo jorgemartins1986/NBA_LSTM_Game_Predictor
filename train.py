@@ -25,7 +25,7 @@ def train_ensemble():
     
     print("="*70)
     print("NBA ENSEMBLE PREDICTOR")
-    print("Training multiple models for improved accuracy")
+    print("Training with separate chronological fitting and evaluation periods")
     print("="*70)
     
     # Fetch data
@@ -43,7 +43,7 @@ def train_ensemble():
     # Configure and train ensemble
     config = EnsembleConfig(
         architectures=['xgboost', 'random_forest', 'logistic', 'lstm'],
-        test_size=0.2,
+        test_size=0.1,
         use_sample_weights=True
     )
     trainer = EnsembleTrainer(config=config)
@@ -51,18 +51,16 @@ def train_ensemble():
     # Train
     result = trainer.train(matchup_df)
     
-    # Evaluate
-    trainer.evaluate(result, matchup_df)
-    
-    # Train stacking meta-model
-    result = trainer.train_stacking(result, matchup_df)
+    # Fit stacking/calibration before inspecting the separate final holdout.
+    result = trainer.train_stacking(result)
+    trainer.evaluate(result)
     
     # Save
     trainer.save(result)
     
     print("\n" + "="*70)
     print("✅ ENSEMBLE TRAINING COMPLETE!")
-    print(f"🎯 Average Accuracy: {result.average_accuracy*100:.2f}%")
+    print(f"Final holdout averaging accuracy: {result.ensemble_accuracy*100:.2f}%")
     print("="*70)
     print("\nEnsemble composition:")
     print("  1. XGBoost (optimized gradient boosted trees)")
@@ -96,10 +94,10 @@ Models trained:
 
 Training will:
   1. Fetch latest NBA data from API
-  2. Engineer 112+ features including fatigue and H2H
-  3. Train all 4 models with chronological split
-  4. Build stacking meta-model and Platt calibrator
-  5. Save models to models/ directory
+  2. Engineer matchup features including fatigue and H2H
+  3. Split five date-disjoint periods (70/10/5/5/10)
+  4. Fit base models, then stacking and calibration on separate periods
+  5. Evaluate on final holdout; save models and training manifest
         """
     )
     

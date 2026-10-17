@@ -5,6 +5,8 @@ __pycache__/
 *.pyo
 *.egg-info
 .eggs/
+.pytest_cache/
+.test_tmp_season/
 
 # Generated test coverage data (keep .coveragerc tracked)
 .coverage

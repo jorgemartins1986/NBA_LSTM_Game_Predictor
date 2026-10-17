@@ -16,19 +16,23 @@ import numpy as np
 import pandas as pd
 import pickle
 
-from .data_prep import DataPreparation, TrainTestData, ScaledData
+from .data_prep import DataPreparation, TrainTestData
 from .trainers import (
-    ModelTrainer, TrainerFactory, TrainerConfig, TrainingResult,
+    TrainerFactory, TrainerConfig, TrainingResult,
     XGBoostConfig, RandomForestConfig, LogisticConfig, LSTMConfig
 )
 from .evaluation import ModelEvaluator, EvaluationResult
+from .partitions import TrainingPartitions, prepare_partitions
 
 
 @dataclass
 class EnsembleConfig:
     """Configuration for ensemble training"""
     architectures: List[str] = field(default_factory=lambda: ['xgboost', 'random_forest', 'logistic', 'lstm'])
-    test_size: float = 0.2
+    test_size: float = 0.1  # Final holdout, never used for fitting
+    validation_size: float = 0.1
+    stacking_size: float = 0.05
+    calibration_size: float = 0.05
     random_state: int = 42
     use_sample_weights: bool = True
     weight_decay: float = 1.2
@@ -48,6 +52,9 @@ class EnsembleResult:
     # Stacking artifacts
     meta_clf: Optional[Any] = None
     platt: Optional[Any] = None
+    partitions: Optional[TrainingPartitions] = None
+    final_evaluations: Dict[str, EvaluationResult] = field(default_factory=dict)
+    final_model_evaluations: List[EvaluationResult] = field(default_factory=list)
     
     @property
     def n_models(self) -> int:
@@ -126,6 +133,11 @@ class EnsembleTrainer:
         self._log("Preparing data...")
         data, feature_cols = self.data_prep.prepare_for_training(matchup_df)
         self._log(f"✓ Prepared {data.n_train_samples} training samples, {data.n_test_samples} test samples")
+        if isinstance(data.train_dates, np.ndarray) and isinstance(data.test_dates, np.ndarray):
+            self._log(f"Training dates: {pd.Timestamp(data.train_dates[0]).date()} to "
+                      f"{pd.Timestamp(data.train_dates[-1]).date()}")
+            self._log(f"Validation dates: {pd.Timestamp(data.test_dates[0]).date()} to "
+                      f"{pd.Timestamp(data.test_dates[-1]).date()} (no shared dates)")
         return data, feature_cols
     
     def compute_sample_weights(self, n_samples: int) -> Optional[np.ndarray]:
@@ -200,8 +212,14 @@ class EnsembleTrainer:
         self._log(f"TRAINING ENSEMBLE OF {len(self.config.architectures)} MODELS")
         self._log("="*70)
         
-        # Prepare data once
-        data, feature_cols = self.prepare_data(matchup_df)
+        # Freeze all five periods before fitting any model. The final period is
+        # retained for evaluation only and never passed to a trainer/callback.
+        partitions = prepare_partitions(matchup_df, self.data_prep,
+            self.config.validation_size, self.config.stacking_size, self.config.calibration_size,
+            test_size=self.config.test_size)
+        data, feature_cols = partitions.base_model_data(), partitions.feature_cols
+        for name, period in partitions.summary().items():
+            self._log(f"{name}: {period['games']} games, {period['start']} to {period['end']}")
         
         # Train each model
         training_results: List[TrainingResult] = []
@@ -223,10 +241,10 @@ class EnsembleTrainer:
         self._log(f"\n{'='*70}")
         self._log("ENSEMBLE TRAINING COMPLETE")
         self._log(f"{'='*70}")
-        self._log(f"Individual model accuracies:")
+        self._log("Early-stopping validation accuracies (not final holdout):")
         for i, (acc, arch) in enumerate(zip(individual_accs, self.config.architectures)):
             self._log(f"  Model {i+1} ({arch}): {acc*100:.2f}%")
-        self._log(f"\nAverage: {np.mean(individual_accs)*100:.2f}%")
+        self._log(f"\nEarly-stopping validation mean: {np.mean(individual_accs)*100:.2f}%")
         
         return EnsembleResult(
             models=models,
@@ -234,193 +252,182 @@ class EnsembleTrainer:
             feature_cols=feature_cols,
             model_types=model_types,
             training_results=training_results,
-            individual_accuracies=individual_accs
+            individual_accuracies=individual_accs,
+            partitions=partitions
         )
     
-    def evaluate(self, result: EnsembleResult, matchup_df: pd.DataFrame) -> EvaluationResult:
-        """
-        Evaluate the ensemble on test data.
-        
-        Args:
-            result: EnsembleResult from training
-            matchup_df: Matchup dataframe for evaluation
-            
-        Returns:
-            EvaluationResult with ensemble metrics
-        """
-        self._log("\n" + "="*70)
-        self._log("EVALUATING ENSEMBLE")
-        self._log("="*70)
-        
-        # Get test data
-        data, _ = self.prepare_data(matchup_df)
-        
-        # Get predictions from each model
-        all_preds = []
-        model_names = []
-        
-        for model, scaler, model_type in zip(result.models, result.scalers, result.model_types):
-            X_test_scaled = scaler.transform(data.X_test)
-            
-            trainer = self.trainer_factory.create(model_type)
-            
-            # predict_proba handles feature selection internally
-            preds = trainer.predict_proba(model, X_test_scaled)
-            all_preds.append(preds)
-            model_names.append(model_type)
-        
-        # Evaluate ensemble
-        eval_result = self.evaluator.evaluate_ensemble(
-            all_preds, data.y_test, model_names
-        )
-        
-        result.ensemble_accuracy = eval_result.accuracy
-        
-        self._log(f"\n🎯 ENSEMBLE ACCURACY: {eval_result.accuracy*100:.2f}%")
-        self._log(eval_result.classification_report)
-        
-        return eval_result
-    
-    def train_stacking(self, result: EnsembleResult, matchup_df: pd.DataFrame) -> EnsembleResult:
-        """
-        Train stacking meta-model and Platt calibrator on test set predictions.
-        
-        The stacking approach:
-        1. Get each base model's probability predictions on test set
-        2. Build meta-features: [raw_probs, confidences]
-        3. Train LogisticRegression as meta-classifier
-        4. Train Platt calibrator on meta-classifier output
-        
-        Args:
-            result: EnsembleResult with trained base models
-            matchup_df: Matchup dataframe (same as used for training)
-            
-        Returns:
-            Updated EnsembleResult with meta_clf and platt
+    @staticmethod
+    def _require_partitions(result: EnsembleResult) -> TrainingPartitions:
+        if not isinstance(result.partitions, TrainingPartitions):
+            raise ValueError("Call train() to create five chronological periods before stacking/evaluation")
+        if result.feature_cols != result.partitions.feature_cols:
+            raise ValueError("Feature schema differs from the frozen training periods")
+        if not result.models or not (len(result.models) == len(result.scalers) == len(result.model_types)):
+            raise ValueError("Models, scalers, and model types must have matching nonzero lengths")
+        return result.partitions
+
+    def _period_predictions(self, result: EnsembleResult, matrix: np.ndarray) -> np.ndarray:
+        columns = []
+        for model, scaler, kind in zip(result.models, result.scalers, result.model_types):
+            trainer = self.trainer_factory.create(kind)
+            columns.append(trainer.predict_proba(model, scaler.transform(matrix)))
+        raw = np.column_stack(columns)
+        if not np.isfinite(raw).all() or ((raw < 0) | (raw > 1)).any():
+            raise ValueError("Invalid model probabilities")
+        return raw
+
+    @staticmethod
+    def _meta_features(raw: np.ndarray) -> np.ndarray:
+        return np.hstack([raw, np.abs(raw - .5)])
+
+    def train_stacking(self, result: EnsembleResult,
+                       matchup_df: Optional[pd.DataFrame] = None) -> EnsembleResult:
+        """Fit stacking and calibration on their own frozen chronological periods.
+
+        matchup_df is accepted for old callers, but the train() snapshot is used.
+        This method never reads or scores the final-test period.
         """
         from sklearn.linear_model import LogisticRegression
-        from sklearn.model_selection import cross_val_predict
-        
-        self._log("\n" + "="*70)
-        self._log("TRAINING STACKING META-MODEL")
-        self._log("="*70)
-        
-        # Get test data
-        data, _ = self.prepare_data(matchup_df)
-        
-        # Collect predictions from each base model on test set
-        all_test_preds = []
-        
-        for model, scaler, model_type in zip(result.models, result.scalers, result.model_types):
-            X_test_scaled = scaler.transform(data.X_test)
-            
-            trainer = self.trainer_factory.create(model_type)
-            preds = trainer.predict_proba(model, X_test_scaled)
-            all_test_preds.append(preds)
-        
-        # Build meta-features: [raw_probs, confidences]
-        raw_probs = np.column_stack(all_test_preds)  # Shape: (n_test, n_models)
-        confidences = np.abs(raw_probs - 0.5)  # Distance from 50%
-        
-        meta_X = np.hstack([raw_probs, confidences])  # Shape: (n_test, 2*n_models)
-        meta_y = data.y_test
-        
-        self._log(f"✓ Built meta-features: {meta_X.shape}")
-        
-        # Train meta-classifier (logistic regression)
-        meta_clf = LogisticRegression(
-            C=1.0, 
-            class_weight='balanced',
-            max_iter=1000,
-            random_state=self.config.random_state
-        )
-        meta_clf.fit(meta_X, meta_y)
-        
-        # Get meta-classifier predictions for Platt calibration
-        meta_probs = meta_clf.predict_proba(meta_X)[:, 1]
-        
-        # Train Platt calibrator (another logistic regression on meta-probs)
-        platt = LogisticRegression(
-            C=1.0,
-            max_iter=1000,
-            random_state=self.config.random_state
-        )
-        platt.fit(meta_probs.reshape(-1, 1), meta_y)
-        
-        # Evaluate stacking
-        stacked_preds = platt.predict_proba(meta_probs.reshape(-1, 1))[:, 1]
-        stacked_accuracy = np.mean((stacked_preds >= 0.5) == meta_y)
-        
-        self._log(f"✓ Trained meta-classifier")
-        self._log(f"✓ Trained Platt calibrator")
-        self._log(f"🎯 STACKED ACCURACY: {stacked_accuracy*100:.2f}%")
-        
-        # Update result with stacking artifacts
-        result.meta_clf = meta_clf
-        result.platt = platt
-        
+
+        periods = self._require_partitions(result)
+        if result.final_evaluations:
+            raise ValueError("Cannot refit stacking after final holdout evaluation")
+        self._log("TRAINING STACKING META-MODEL ON ITS SEPARATE PERIOD")
+        raw = self._period_predictions(result, periods.stacker_fit.X)
+        meta_clf = LogisticRegression(C=1., class_weight='balanced', max_iter=1000,
+                                      random_state=self.config.random_state)
+        meta_clf.fit(self._meta_features(raw), periods.stacker_fit.y)
+        raw_calibration = self._period_predictions(result, periods.calibrator_fit.X)
+        meta_probs = meta_clf.predict_proba(self._meta_features(raw_calibration))[:, 1]
+        platt = LogisticRegression(C=1., max_iter=1000, random_state=self.config.random_state)
+        platt.fit(meta_probs.reshape(-1, 1), periods.calibrator_fit.y)
+        result.meta_clf, result.platt = meta_clf, platt
+        self._log("Stacker and Platt calibrator fitted on separate periods; final holdout untouched.")
         return result
-    
-    def save(self, result: EnsembleResult):
+
+    def evaluate(self, result: EnsembleResult,
+                 matchup_df: Optional[pd.DataFrame] = None) -> EvaluationResult:
+        """Score already fitted methods on the frozen final holdout, without fitting.
+
+        matchup_df is retained for call compatibility; new data cannot replace
+        the final period chosen before train(). No method is auto-selected here.
         """
-        Save the trained ensemble to disk.
-        
-        Args:
-            result: EnsembleResult from training
+        periods = self._require_partitions(result)
+        if result.meta_clf is None or result.platt is None:
+            raise ValueError("Fit stacking/calibration before inspecting the final holdout")
+        self._log("EVALUATING ALL METHODS ON THE UNTOUCHED FINAL HOLDOUT")
+        final = periods.final_test
+        raw = self._period_predictions(result, final.X)
+        result.final_model_evaluations = [
+            self.evaluator.evaluate_predictions(final.y, (p > .5).astype(int), p)
+            for p in raw.T]
+        averaged = self.evaluator.evaluate_ensemble(list(raw.T), final.y, result.model_types)
+        stacked = result.meta_clf.predict_proba(self._meta_features(raw))[:, 1]
+        calibrated = result.platt.predict_proba(stacked.reshape(-1, 1))[:, 1]
+        result.final_evaluations = {
+            'average': averaged,
+            'stacking': self.evaluator.evaluate_predictions(final.y, (stacked > .5).astype(int), stacked),
+            'calibrated_stacking': self.evaluator.evaluate_predictions(
+                final.y, (calibrated > .5).astype(int), calibrated)}
+        result.ensemble_accuracy = averaged.accuracy
+        self._log(f"Final holdout: {len(final.y)} games, "
+                  f"{pd.Timestamp(final.dates[0]).date()} to {pd.Timestamp(final.dates[-1]).date()}")
+        self._log(f"{'Model / method':<32} {'Correct / games':>16} {'Accuracy':>10} "
+                  f"{'Brier':>10} {'Log loss':>10}")
+        self._log('-' * 82)
+        rows = [(f'Model {i} ({kind})', evaluated) for i, (kind, evaluated) in
+                enumerate(zip(result.model_types, result.final_model_evaluations), 1)]
+        rows.extend((('Averaging ensemble', averaged),
+                     ('Stacking ensemble', result.final_evaluations['stacking']),
+                     ('Calibrated stacking', result.final_evaluations['calibrated_stacking'])))
+        for name, evaluated in rows:
+            scores = evaluated.metrics()
+            correct = int(np.count_nonzero(evaluated.y_pred == evaluated.y_true))
+            counts = f"{correct} / {scores['games']}"
+            self._log(f"{name:<32} {counts:>16} {scores['accuracy']:>10.2%} "
+                      f"{scores['brier']:>10.5f} {scores['log_loss']:>10.5f}")
+        mean_accuracy = float(np.mean([item.accuracy for item in result.final_model_evaluations]))
+        self._log(f"Final holdout mean of individual accuracies: {mean_accuracy:.2%} "
+                  "(arithmetic mean, not an ensemble prediction)")
+        self._log(f"Averaging ensemble versus individual mean: "
+                  f"{100 * (averaged.accuracy - mean_accuracy):+.2f} percentage points")
+        self._log("Accuracy: higher is better. Brier and log loss: lower is better.")
+        self._log("Prediction method remains averaging; holdout scores do not auto-select a method.")
+        return averaged
+
+    def save(self, result: EnsembleResult, output_dir=None):
+        """Save an evaluated model set and its chronological training manifest.
+
+        output_dir supports isolated validation runs without replacing production.
+        Existing external weights must be explicitly revalidated, never inherited.
         """
-        from ..paths import (
-            get_model_path, ENSEMBLE_SCALERS_FILE, 
-            ENSEMBLE_FEATURES_FILE, ENSEMBLE_TYPES_FILE,
-            ENSEMBLE_META_LR_FILE, ENSEMBLE_PLATT_FILE
-        )
-        
-        self._log("\n💾 Saving ensemble...")
-        
-        for i, (model, model_type) in enumerate(zip(result.models, result.model_types)):
-            if model_type == 'logistic':
-                with open(get_model_path(f'nba_ensemble_logistic_{i+1}.pkl'), 'wb') as f:
-                    pickle.dump(model, f)
-                self._log(f"✓ Saved Logistic Regression model {i+1}")
-            elif model_type == 'xgboost':
+        import hashlib
+        import json
+        from dataclasses import asdict
+        from datetime import datetime, timezone
+        from importlib.metadata import version
+        from pathlib import Path
+        from ..paths import MODELS_DIR
+
+        periods = self._require_partitions(result)
+        if set(result.final_evaluations) != {'average', 'stacking', 'calibrated_stacking'}:
+            raise ValueError("Evaluate all fitted methods on the final holdout before saving")
+        directory = Path(output_dir or MODELS_DIR)
+        if (directory / 'ensemble_weights.pkl').exists():
+            raise ValueError("External ensemble_weights.pkl must be removed or revalidated before saving a new equal-weight model set")
+        directory.mkdir(parents=True, exist_ok=True)
+        artifacts = []
+
+        def save_pickle(name, value):
+            path = directory / name
+            with path.open('wb') as stream:
+                pickle.dump(value, stream)
+            artifacts.append(path)
+
+        for i, (model, kind) in enumerate(zip(result.models, result.model_types), 1):
+            if kind == 'logistic':
+                save_pickle(f'nba_ensemble_logistic_{i}.pkl', model)
+            elif kind == 'random_forest':
+                save_pickle(f'nba_ensemble_rf_{i}.pkl', model)
+            elif kind == 'xgboost':
+                path = directory / f'nba_ensemble_xgboost_{i}.json'
                 try:
-                    booster = model.get_booster()
-                    booster.save_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
-                    self._log(f"✓ Saved XGBoost Booster model {i+1}")
+                    model.get_booster().save_model(str(path))
                 except Exception:
-                    try:
-                        model.save_model(get_model_path(f'nba_ensemble_xgboost_{i+1}.json'))
-                        self._log(f"✓ Saved XGBoost model {i+1}")
-                    except Exception as e:
-                        self._log(f"❌ Failed to save XGBoost model {i+1}: {e}")
-            elif model_type == 'random_forest':
-                with open(get_model_path(f'nba_ensemble_rf_{i+1}.pkl'), 'wb') as f:
-                    pickle.dump(model, f)
-                self._log(f"✓ Saved Random Forest model {i+1}")
-            else:  # keras
-                model.save(get_model_path(f'nba_ensemble_model_{i+1}.keras'))
-                self._log(f"✓ Saved Keras model {i+1}")
-        
-        with open(ENSEMBLE_SCALERS_FILE, 'wb') as f:
-            pickle.dump(result.scalers, f)
-        
-        with open(ENSEMBLE_FEATURES_FILE, 'wb') as f:
-            pickle.dump(result.feature_cols, f)
-        
-        with open(ENSEMBLE_TYPES_FILE, 'wb') as f:
-            pickle.dump(result.model_types, f)
-        
-        # Save stacking artifacts if trained
-        if result.meta_clf is not None:
-            with open(ENSEMBLE_META_LR_FILE, 'wb') as f:
-                pickle.dump(result.meta_clf, f)
-            self._log("✓ Saved stacking meta-classifier")
-        
-        if result.platt is not None:
-            with open(ENSEMBLE_PLATT_FILE, 'wb') as f:
-                pickle.dump(result.platt, f)
-            self._log("✓ Saved Platt calibrator")
-        
-        self._log("✓ Ensemble saved successfully")
+                    model.save_model(str(path))
+                artifacts.append(path)
+            else:
+                path = directory / f'nba_ensemble_model_{i}.keras'
+                model.save(str(path))
+                artifacts.append(path)
+        save_pickle('ensemble_scalers.pkl', result.scalers)
+        save_pickle('ensemble_features.pkl', result.feature_cols)
+        save_pickle('ensemble_model_types.pkl', result.model_types)
+        save_pickle('ensemble_stack_meta_lr.pkl', result.meta_clf)
+        save_pickle('ensemble_stack_platt.pkl', result.platt)
+        manifest = {
+            'protocol': 'chronological-five-period-v1',
+            'created_at_utc': datetime.now(timezone.utc).isoformat(),
+            'periods': periods.summary(), 'input_sha256': periods.input_sha256,
+            'feature_cols': result.feature_cols, 'model_types': result.model_types,
+            'config': asdict(self.config),
+            'packages': {name: version(name) for name in
+                         ('numpy', 'pandas', 'scikit-learn', 'tensorflow', 'xgboost')},
+            'prediction_method': 'average', 'threshold': .5,
+            'method_selected_using_final_test': False,
+            'early_stopping_accuracies': [float(item.accuracy) for item in result.training_results],
+            'final_holdout_metrics': {name: value.metrics() for name, value in result.final_evaluations.items()},
+            'final_holdout_individual_metrics': [
+                {'model_index': i, 'model_type': kind, **evaluated.metrics(),
+                 'correct': int(np.count_nonzero(evaluated.y_pred == evaluated.y_true))}
+                for i, (kind, evaluated) in
+                enumerate(zip(result.model_types, result.final_model_evaluations), 1)],
+            'final_holdout_mean_individual_accuracy': float(np.mean(
+                [item.accuracy for item in result.final_model_evaluations])),
+            'artifact_sha256': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}}
+        (directory / 'ensemble_training_manifest.json').write_text(
+            json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+        self._log(f"Ensemble and five-period training manifest saved to {directory}")
 
 
 def train_ensemble_models(matchup_df: pd.DataFrame,

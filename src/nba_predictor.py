@@ -34,7 +34,6 @@ from nba_api.stats.static import teams
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
 
 # ML imports
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import tensorflow as tf
@@ -820,27 +819,22 @@ class NBAPredictor:
         """
         print("\nPreparing training data...")
         
-        # Feature columns - EXCLUDE the target and metadata columns!
-        # CRITICAL: Do NOT include HOME_WIN, GAME_ID, GAME_DATE, HOME_TEAM_ID, AWAY_TEAM_ID
-        exclude_cols = ['HOME_WIN', 'GAME_ID', 'GAME_DATE', 'HOME_TEAM_ID', 'AWAY_TEAM_ID']
-        self.feature_cols = [col for col in matchup_df.columns 
-                            if col not in exclude_cols]
-        
-        print(f"✓ Using {len(self.feature_cols)} features (excluded: {exclude_cols})")
-        
-        X = matchup_df[self.feature_cols].values
-        y = matchup_df['HOME_WIN'].values
-        
-        # CHRONOLOGICAL SPLIT: Use shuffle=False to prevent temporal leakage
-        # Training data = older games, test data = newer games
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, shuffle=False
-        )
-        
-        # Scale features
+        # Legacy single-model calls also reserve a final period before fitting.
+        from .training.data_prep import DataPreparation
+        outer, self.feature_cols = DataPreparation(test_size=test_size).prepare_for_training(matchup_df)
+        inner = DataPreparation(test_size=.1 / (1 - test_size)).chronological_split(
+            outer.X_train, outer.y_train, outer.train_dates)
+        X_train, y_train = inner.X_train, inner.y_train
+        X_validation, y_validation = inner.X_test, inner.y_test
+        X_test, y_test = outer.X_test, outer.y_test
+        print(f"Using {len(self.feature_cols)} features")
+        print(f"Training through {pd.Timestamp(inner.train_dates[-1]).date()}; "
+              f"early stopping starts {pd.Timestamp(inner.test_dates[0]).date()}; "
+              f"final test starts {pd.Timestamp(outer.test_dates[0]).date()}")
         X_train_scaled = self.scaler.fit_transform(X_train)
+        X_validation_scaled = self.scaler.transform(X_validation)
         X_test_scaled = self.scaler.transform(X_test)
-        
+
         # Save scaler for future predictions
         import pickle
         with open(get_model_path('scaler.pkl'), 'wb') as f:
@@ -884,7 +878,7 @@ class NBAPredictor:
         print("\nTraining model...")
         history = self.model.fit(
             X_train_scaled, y_train,
-            validation_data=(X_test_scaled, y_test),
+            validation_data=(X_validation_scaled, y_validation),
             epochs=epochs,
             batch_size=32,
             callbacks=[early_stop, reduce_lr, checkpoint],

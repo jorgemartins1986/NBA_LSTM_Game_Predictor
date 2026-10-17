@@ -13,7 +13,18 @@ python -m main train
 ```
 
 Training writes the standard model paths and overwrites earlier models. Existing
-saved models can be used without retraining. Training duration depends on data
+saved models can be loaded without retraining. Retrain to apply the corrected
+date ordering and separate training/evaluation periods; older artifacts retain
+their original protocol. Training now uses approximately 70/10/5/5/10 for base
+training, early stopping, stacker fitting, calibration, and final evaluation,
+with no shared dates. It saves dates, fingerprints, and final metrics in
+`models/ensemble_training_manifest.json`. Final evaluation compares three
+methods without automatically changing the averaging method used for picks.
+The final table compares all individual models and the three ensemble methods
+on identical holdout games, showing correct/game counts, accuracy, Brier score,
+and log loss. The mean individual accuracy is labeled separately from the
+averaging ensemble's accuracy.
+Training duration depends on data
 and hardware; a particular runtime or accuracy increase is not guaranteed.
 
 Check `config/season.json`:
@@ -204,6 +215,8 @@ model files. The interface does not train models or settle prediction results.
 | --- | --- |
 | Missing model/scaler/feature files | Train or restore a matching complete artifact set; verify the loader's reported model count. |
 | A model is skipped during loading | Check its filename and library compatibility. A partial model set can also be incompatible with saved stacking artifacts. |
+| Training cannot create five periods | Check for missing/invalid dates or game IDs, sufficient distinct dates, and both outcomes in each fitting period. |
+| Saving rejects `ensemble_weights.pkl` | Archive/remove old custom weights before saving the new equal-weight ensemble; validate replacement weights separately. |
 | No games | Check target date, NBA schedule, API availability, and whether IDs correspond to franchises. Manual input overrides only the schedule. |
 | Not enough history | Check season, cache freshness, preseason flag, and carryover setting. Twenty is the window size, not the minimum number required to attempt inference. |
 | Stale web predictions | Refresh raw season data and restart the service if models changed. |
@@ -211,7 +224,7 @@ model files. The interface does not train models or settle prediction results.
 | Old records or feature formulas corrected | Explicitly rebuild derived caches; their compatibility header does not fingerprint every source row or code change. |
 | No GPU detected | CPU execution is supported; verify platform/build support separately if GPU acceleration is needed. |
 | Garbled console symbols | Try UTF-8 mode, for example `python -X utf8 -m main predict`, and a UTF-8-capable terminal. |
-| Low reported accuracy | Check sample size, missing features, chronology, validation reuse, and model version before changing hyperparameters or retraining. |
+| Low reported accuracy | Distinguish developmental scores from final holdout metrics; check sample, input features, dates, model manifest, and training/live differences. Older artifacts can retain the earlier validation reuse. |
 
 There is no automatic retraining schedule. Preserve the old model set and compare
 on a fixed later sample when deciding whether a retrain helped.

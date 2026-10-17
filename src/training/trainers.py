@@ -182,7 +182,7 @@ class XGBoostTrainer(ModelTrainer):
         y_pred = (y_pred_prob > 0.5).astype(int)
         accuracy = accuracy_score(data.y_test, y_pred)
         report = classification_report(data.y_test, y_pred,
-                                       target_names=['Away Win', 'Home Win'])
+                                       labels=[0, 1], target_names=['Away Win', 'Home Win'], zero_division=0)
         
         return TrainingResult(
             model=model,
@@ -278,7 +278,7 @@ class RandomForestTrainer(ModelTrainer):
         y_pred = (y_pred_prob > 0.5).astype(int)
         accuracy = accuracy_score(data.y_test, y_pred)
         report = classification_report(data.y_test, y_pred,
-                                       target_names=['Away Win', 'Home Win'])
+                                       labels=[0, 1], target_names=['Away Win', 'Home Win'], zero_division=0)
         
         return TrainingResult(
             model=model,
@@ -336,7 +336,7 @@ class LogisticTrainer(ModelTrainer):
         y_pred = (y_pred_prob > 0.5).astype(int)
         accuracy = accuracy_score(data.y_test, y_pred)
         report = classification_report(data.y_test, y_pred,
-                                       target_names=['Away Win', 'Home Win'])
+                                       labels=[0, 1], target_names=['Away Win', 'Home Win'], zero_division=0)
         
         return TrainingResult(
             model=model,
@@ -433,7 +433,7 @@ class LSTMTrainer(ModelTrainer):
         y_pred = (y_pred_prob > 0.5).astype(int)
         accuracy = accuracy_score(data.y_test, y_pred)
         report = classification_report(data.y_test, y_pred,
-                                       target_names=['Away Win', 'Home Win'])
+                                       labels=[0, 1], target_names=['Away Win', 'Home Win'], zero_division=0)
         
         return TrainingResult(
             model=model,

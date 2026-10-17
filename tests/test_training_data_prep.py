@@ -122,7 +122,7 @@ class TestDataPreparation:
         feature_cols = data_prep.get_feature_columns(sample_df)
         X, y = data_prep.prepare_features(sample_df, feature_cols)
         
-        data = data_prep.chronological_split(X, y)
+        data = data_prep.chronological_split(X, y, sample_df['GAME_DATE'])
         
         # Check sizes (80/20 split)
         assert data.n_train_samples == 80
@@ -137,7 +137,7 @@ class TestDataPreparation:
         """Test feature scaling"""
         feature_cols = data_prep.get_feature_columns(sample_df)
         X, y = data_prep.prepare_features(sample_df, feature_cols)
-        data = data_prep.chronological_split(X, y)
+        data = data_prep.chronological_split(X, y, sample_df['GAME_DATE'])
         
         scaled = data_prep.scale_features(data)
         
