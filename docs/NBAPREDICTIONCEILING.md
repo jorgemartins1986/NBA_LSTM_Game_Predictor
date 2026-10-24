@@ -26,10 +26,19 @@ predictions. The current final summary uses the latter. A timestamped report in
 Training saves final metrics in `models/ensemble_training_manifest.json`; it
 does not automatically call the separate classification-report export helper.
 
-History also lacks a model fingerprint/training cutoff and does not distinguish
-all configuration changes. CLI single-model and ensemble runs share the same
-CSV. Date/team duplicate rules keep the first recorded pick. Inspect those facts
-before attributing history accuracy to one frozen model version.
+History retains its original ten-column format without model fingerprints,
+recording timestamps, or replay flags. Single-model and ensemble CLI runs share
+this CSV. Date/team duplicate rules keep the first recorded pick. Completed
+historical backfills count in history statistics, so a mixed CSV cannot establish
+performance recorded before tipoff or attribute it to one frozen model version.
+
+CLI and web predictions use the same pre-date standings calculation. Past-date
+CLI runs exclude target/later results from rolling, H2H, and
+reconstructed regular-season standings, infer the target season, and omit live
+odds and current-history filter recommendations. A replay is blocked unless its
+model files match a manifest whose model creation and all training/evaluation
+periods precede the target day. Reconstructed standings do not reproduce official
+tiebreakers, and revised source statistics are not original timestamped snapshots.
 
 ## Current validation behavior
 
@@ -208,7 +217,7 @@ current production claim without a corresponding independent sample.
 
 ## Accuracy, software coverage, and ROI
 
-The latest verified software suite has 568 passing tests and 90.43% aggregate
+The latest verified software suite has 617 passing tests and 90.91% aggregate
 line coverage in `.coveragerc`'s scope, with an enforced 85% coverage-run minimum.
 That checks software paths; it does not measure or guarantee NBA prediction accuracy.
 Legacy scripts, GPU utilities, and package initializers remain excluded.

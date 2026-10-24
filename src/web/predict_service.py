@@ -4,9 +4,8 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 
 from nba_api.stats.static import teams
-import pandas as pd
 from src.prediction.rolling_history import load_prediction_history, upcoming_team_stats
-from src.prediction.nba_data import get_current_season
+from src.prediction.historical import games_before_date, historical_standings, season_for_date
 
 from src.prediction import (
     ScheduleUnavailableError,
@@ -15,7 +14,6 @@ from src.prediction import (
     fetch_season_games,
     get_default_standings,
     get_live_odds,
-    get_live_standings,
     get_todays_games,
     get_eastern_date,
     compute_head_to_head,
@@ -68,7 +66,6 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
     all_teams = teams.get_teams()
     team_id_to_info = {team["id"]: team for team in all_teams}
 
-    games_df = fetch_season_games(verbose=False)
     try:
         todays_games, game_date, all_finished = get_todays_games(verbose=False)
     except ScheduleUnavailableError as error:
@@ -85,10 +82,11 @@ def run_todays_predictions(single_model: str = "ensemble") -> Dict:
             "skipped_reason": f"No games scheduled for {game_date} in the retrieved NBA schedule.",
         }
 
-    active_season = get_current_season()
+    active_season = season_for_date(game_date)
+    games_df = fetch_season_games(season=active_season, verbose=False)
     history_df = load_prediction_history(games_df, active_season, verbose=False)
-    games_df = games_df[pd.to_datetime(games_df['GAME_DATE']) < pd.Timestamp(game_date)]
-    live_standings = get_live_standings(verbose=False)
+    games_df = games_before_date(games_df, game_date)
+    live_standings = historical_standings(games_df, game_date, active_season)
     live_odds = get_live_odds(verbose=False)
 
     predictions = []

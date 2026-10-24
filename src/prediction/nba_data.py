@@ -424,7 +424,8 @@ def get_todays_games(verbose: bool = True, date_str: str | None = None) -> Tuple
                 print(f"   No games found via scoreboardv2 for {game_date_str}; trying leaguegamefinder fallback...")
             try:
                 # Try season types in order for scheduled games
-                season = get_current_season()
+                from .historical import season_for_date
+                season = season_for_date(game_date_str)
                 season_types = ['Regular Season', 'PlayIn', 'Playoffs']
                 lg_games = None
                 date_us = datetime.strptime(game_date_str, '%Y-%m-%d').strftime('%m/%d/%Y')

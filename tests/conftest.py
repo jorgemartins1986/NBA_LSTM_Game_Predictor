@@ -9,6 +9,8 @@ import numpy as np
 import tempfile
 import os
 import sys
+import builtins
+import io
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -156,3 +158,48 @@ def setup_test_env(monkeypatch):
     # Disable GPU for testing
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '')
     monkeypatch.setenv('TF_CPP_MIN_LOG_LEVEL', '3')  # Suppress TF warnings
+
+
+@pytest.fixture(autouse=True)
+def protect_real_prediction_history(monkeypatch):
+    """Tests may read real history, but must never write it or its backups."""
+    from src.paths import PROJECT_ROOT
+    protected = os.path.normcase(os.path.abspath(os.path.join(PROJECT_ROOT, 'reports', 'prediction_history.csv')))
+
+    def check(path):
+        if isinstance(path, int):
+            return
+        candidate = os.path.normcase(os.path.abspath(os.fsdecode(path)))
+        if candidate in {protected, protected + '.bak', protected + '.lock'} or (
+                os.path.dirname(candidate) == os.path.dirname(protected)
+                and os.path.basename(candidate).startswith('.prediction_history.csv.')):
+            raise PermissionError('Tests must use temporary prediction history, never the real file.')
+
+    def wrap_open(original):
+        def guarded(path, mode='r', *args, **kwargs):
+            if any(flag in mode for flag in 'wax+'):
+                check(path)
+            return original(path, mode, *args, **kwargs)
+        return guarded
+
+    original_os_open = os.open
+    def guarded_os_open(path, flags, *args, **kwargs):
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
+            check(path)
+        return original_os_open(path, flags, *args, **kwargs)
+
+    original_replace = os.replace
+    def guarded_replace(source, destination, *args, **kwargs):
+        check(source)
+        check(destination)
+        return original_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, 'open', wrap_open(builtins.open))
+    monkeypatch.setattr(io, 'open', wrap_open(io.open))
+    monkeypatch.setattr(os, 'open', guarded_os_open)
+    monkeypatch.setattr(os, 'replace', guarded_replace)
+    original_unlink = os.unlink
+    def guarded_unlink(path, *args, **kwargs):
+        check(path)
+        return original_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'unlink', guarded_unlink)

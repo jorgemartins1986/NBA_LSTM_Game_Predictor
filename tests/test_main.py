@@ -19,7 +19,7 @@ class TestShowDetailedStats:
     
     def test_handles_missing_file(self, tmp_path, monkeypatch, capsys):
         """Should handle missing prediction history file"""
-        monkeypatch.setattr('src.paths.PREDICTION_HISTORY_FILE', str(tmp_path / 'nonexistent.csv'))
+        monkeypatch.setattr('main.PREDICTION_HISTORY_FILE', str(tmp_path / 'nonexistent.csv'))
         
         from main import show_detailed_stats
         show_detailed_stats()

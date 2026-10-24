@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nba_api.stats.static import teams
 from src.prediction.rolling_history import load_prediction_history, upcoming_team_stats
-from src.prediction.nba_data import get_current_season
+from src.prediction.historical import season_for_date, games_before_date, historical_standings, validate_historical_model
 
 from src.prediction import (
     ScheduleUnavailableError,
@@ -32,7 +32,6 @@ from src.prediction import (
     FeatureComputer,
     get_todays_games,
     get_eastern_date,
-    get_live_standings,
     fetch_season_games,
     compute_head_to_head,
     get_default_standings,
@@ -106,6 +105,13 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
                       If None, use full ensemble
     """
     print("="*70)
+
+    eastern_today = get_eastern_date()
+    manual_date = manual_games[0].get('game_date') if manual_games else None
+    requested_date = manual_date or date_override or eastern_today
+    from datetime import datetime
+    requested_date = datetime.strptime(requested_date, '%Y-%m-%d').date().isoformat()
+    historical_run = requested_date < eastern_today
     if single_model:
         print(f"NBA GAME PREDICTIONS - {single_model.upper()} ONLY")
     else:
@@ -116,6 +122,13 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
     # Load ensemble using new ModelLoader
     loader = ModelLoader()
     ensemble = loader.load_ensemble(verbose=True)
+    if historical_run:
+        try:
+            validate_historical_model(ensemble, requested_date)
+        except ValueError as error:
+            print(f"\n❌ {error}")
+            return
+        print(f'Historical replay for {requested_date}: using a verified earlier model version.')
     
     # Filter to single model if specified
     if single_model:
@@ -143,18 +156,7 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
     # Create prediction pipeline
     pipeline = PredictionPipeline(ensemble)
     
-    # Ensure game cache is up to date with recent games
-    print("\n🔄 Updating game cache with latest results...")
-    from src.nba_data_manager import NBADataManager
-    data_manager = NBADataManager()
-    data_manager.update_current_season()
-    
-    # Fetch recent data
-    print("\n📊 Fetching recent team statistics...")
-    games_df = fetch_season_games(verbose=True)
-    
     # Get today's games (or use manual override)
-    requested_date = date_override or get_eastern_date()
     print(f"\n🏀 Fetching games for {requested_date}...")
     if manual_games:
         todays_games = manual_games
@@ -166,7 +168,7 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
                 g['away_team_id'] = g['away_id']
 
         # derive game_date if provided on first game, else use eastern date
-        game_date = manual_games[0].get('game_date') if isinstance(manual_games[0], dict) and manual_games[0].get('game_date') else get_eastern_date()
+        game_date = requested_date
         all_finished = False
         print(f"   Using manual override with {len(todays_games)} game(s)")
     else:
@@ -177,7 +179,6 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
             print(f"   {error}")
             print("   Retry later or supply confirmed fixtures with --manual-games.")
             return
-    eastern_today = get_eastern_date()
     print(f"   Game date from API: {game_date}")
     print(f"   Current date (Eastern): {eastern_today}")
     
@@ -185,25 +186,28 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
         print(f"\nNo games scheduled for {game_date} in the retrieved NBA schedule.")
         return
     
-    # Warn if showing old games
-    if all_finished and game_date != eastern_today:
-        print(f"\n⚠️  WARNING: All games shown are FINAL (from {game_date})")
-        print(f"   Today is {eastern_today} - today's games may not have started yet.")
-        print("   Predictions will still run but won't be saved to history (already recorded).")
+    if historical_run:
+        print('Historical replay: results are excluded from inputs; missing picks will be saved as replays.')
     
     print(f"✓ Found {len(todays_games)} games for {game_date}")
     
-    active_season = get_current_season()
+    active_season = season_for_date(game_date)
+    if not historical_run:
+        print("\n🔄 Updating game cache with latest results...")
+        from src.nba_data_manager import NBADataManager
+        NBADataManager().update_current_season()
+    print(f'\n📊 Fetching team history for {active_season}...')
+    games_df = fetch_season_games(season=active_season, verbose=True)
     history_df = load_prediction_history(games_df, active_season)
     # Restrict H2H to current-season games strictly before the prediction date.
-    import pandas as pd
-    games_df = games_df[pd.to_datetime(games_df['GAME_DATE']) < pd.Timestamp(game_date)]
-
-    # Fetch live standings
-    live_standings = get_live_standings()
-    
-    # Fetch live odds (optional)
-    live_odds = get_live_odds()
+    games_df = games_before_date(games_df, game_date)
+    live_standings = historical_standings(games_df, game_date, active_season)
+    print(f'Standings use regular-season results strictly before {game_date}.')
+    if historical_run:
+        live_odds = {}
+        print('Historical replay: live odds are disabled. Saved replays will count in history statistics.')
+    else:
+        live_odds = get_live_odds()
     
     # Predict each game
     print("\n" + "="*70)
@@ -366,9 +370,12 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
             print(f"   ❌ Prediction error: {e}")
             continue
     
-    # Save predictions to history (if not all games are finished)
-    if predictions and not (all_finished and game_date != eastern_today):
+    # Final status does not suppress a requested historical replay. The saver
+    # preserves existing picks and the original CSV columns.
+    if predictions:
         save_predictions_to_history(predictions, game_date)
+        if historical_run:
+            print(f'To settle these replay rows: python -m main --updateresults {game_date}')
     
     # ── Section 1: Tier-based recommendations (GOOD and above) ─────────
     print("\n" + "="*70)
@@ -395,7 +402,8 @@ def predict_todays_games(single_model: str = None, manual_games: list | None = N
     # ── Section 2: Profitable filter picks (dynamic from history) ──────
     from main import get_profitable_filters, game_matches_filter
 
-    active_filters = get_profitable_filters()
+    # Filters learned from today's history were unavailable before past games.
+    active_filters = [] if historical_run else get_profitable_filters()
     
     if active_filters and predictions:
         print(f"\n{'─'*70}")
@@ -459,7 +467,7 @@ Examples:
     )
     parser.add_argument(
         '--date', '-d',
-        help='Override game date (YYYY-MM-DD) for fetching schedule'
+        help='Prediction date (YYYY-MM-DD); past dates use verified historical inputs and save replay rows'
     )
     
     args = parser.parse_args()

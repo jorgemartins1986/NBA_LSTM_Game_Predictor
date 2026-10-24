@@ -60,8 +60,8 @@ python -m main --updateresults --all
 python -m main --stats
 ```
 
-CLI prediction attempts to refresh the active season's game cache. It fetches a
-schedule, builds upcoming-game statistics, obtains live standings and optional
+Current/future CLI prediction attempts to refresh the active season's game cache. It fetches a
+schedule, builds upcoming-game statistics, reconstructs pre-date standings and obtains optional
 odds, loads the ensemble, and prints probabilities, tiers, and history counts.
 The schedule path tries NBA CDN/static schedule data, ScoreboardV2, and
 LeagueGameFinder fallbacks. External services can still return no usable games.
@@ -73,8 +73,9 @@ schedule list itself.
 
 `reports/prediction_history.csv` stores one pick per date/away/home combination.
 Rerunning a different model does not overwrite that day's already recorded pick.
-Old fully finished schedules can be excluded from saving. Inspect the save
-message rather than assuming every displayed prediction was appended.
+Past-date predictions are appended even if all games are Final. The CSV keeps
+its original ten columns, and completed backfills count in its statistics. Existing picks
+for the same date/teams are preserved; inspect the save message for duplicates.
 
 ## Select one model
 
@@ -114,12 +115,42 @@ Example contents of `matchups.json`:
 These IDs designate Boston at home and the Lakers away; this example does not
 assert a real scheduled matchup. Use actual NBA franchise IDs and supply
 `game_status`, which the display code expects. With a manual list, the first
-object's `game_date` sets the date for the whole list; omitting it uses Eastern
-today. Do not rely on `--date` to replace a missing date in a manual list.
+object's `game_date` sets the date for the whole list; omitting it uses `--date`
+when supplied, otherwise Eastern today.
 
-A historical date limits rolling history and H2H to earlier results, but the
-normal CLI still fetches live standings/odds and uses the configured active
-season. It is not an independent historical replay or backtest.
+CLI and web use the same pre-date regular-season standings calculation for all
+prediction dates. A past CLI date automatically selects historical replay mode. The season is inferred
+from that date, and rolling statistics, H2H, and reconstructed regular-season
+standings use only completed earlier dates. Live odds and filter recommendations
+learned from today's history are disabled. The historical standings use equal
+win-percentage ranks, not the official NBA tiebreaker hierarchy.
+
+The complete saved model set must match its training manifest and artifact hashes.
+Its creation date in Eastern time and all fitting/calibration/evaluation cutoffs
+must precede the requested day. Otherwise the run stops with a provenance error:
+restore a verified earlier model set rather than retraining today for an old date.
+This is conservative at calendar-day granularity. Cached stat corrections and
+the documented training/live feature differences still limit exact reconstruction
+of what was known at the original prediction time.
+
+For example, backfill yesterday and settle the saved replay outcomes:
+
+```powershell
+python -m main predict --date 2026-10-21
+python -m main --updateresults 2026-10-21
+```
+
+No model or replay metadata is added to the history CSV. `winner` and `correct`
+stay pending until the result updater runs. The CSV cannot distinguish a later
+replay from an original pregame pick: completed replays count in `--stats`, web
+statistics, and profitable-filter calculations. Avoid treating mixed history as
+proof of performance recorded before games occurred.
+
+Replaying a deleted pick cannot recover its original percentages. Earlier web
+versions used live NBA standings; both entry points now reconstruct pre-date
+standings with identical rank rules. Identical model files, game data, and
+configuration are required for repeatable probabilities. Later source-data
+corrections or configuration/model changes can still change a reconstruction.
 
 ## Interpret the output
 
@@ -183,6 +214,14 @@ python -m main --updateresults --all --no-lgf
 `--no-cache` bypasses local result-cache lookup; `--no-lgf` skips the
 LeagueGameFinder result source. They do not clear training feature caches.
 
+History keeps its original ten columns. Prediction saving never clears an
+existing result, and new picks have pending results until the updater runs.
+
+Before replacing existing history, saves validate its old cells and keep its
+previous contents in `reports/prediction_history.csv.bak`. The replacement is
+atomic. A malformed file or a concurrent change stops the save instead of
+discarding history.
+
 The statistics screen groups completed picks and searches historical filters.
 Its ROI calculations use fixed 1.41 decimal odds, not actual recorded wagers.
 The CSV has no accepted-odds, stake, or payout columns. Use those summaries as
@@ -191,13 +230,35 @@ on later games.
 
 ## Web workflow
 
+From the repository root, activate your environment and start the server:
+
 ```powershell
+.\venv\Scripts\Activate.ps1
 python -m uvicorn webapp.main:app --host 127.0.0.1 --port 7860
 ```
 
-Open `http://127.0.0.1:7860`; `/stats` reads the CLI history. The prediction endpoint
-is `POST /api/predict` with `{"model": "ensemble"}` or another supported model name.
-It returns predictions without appending them to the CLI history CSV.
+Leave that terminal open, visit [http://127.0.0.1:7860](http://127.0.0.1:7860),
+select a model, and click **Run Predictions**. Stop the server with **Ctrl+C**.
+The first prediction request loads the saved models and can take longer.
+
+| Page or endpoint | Function |
+| --- | --- |
+| `/` | Today's Eastern-date predictions using the ensemble or a selected individual model; matchup, winner, confidence, home probability, agreement, and tier. |
+| `/stats` | Completed prediction history with overall accuracy, grouped performance, and historical filter/ROI summaries. |
+| `/docs`, `/redoc` | Interactive Swagger UI and alternate API reference. |
+| `POST /api/predict` | Prediction JSON; use `{"model": "ensemble"}`, `xgboost`, `random_forest`/`rf`, `logistic`, or `lstm`. |
+| `/health` | Server response check, returning `{"status": "ok"}`. |
+
+The API also includes away probability, game status, and history-window counts
+that the dashboard table does not display. The dashboard selects one model/method
+per run and does not show the CLI's individual-model probability breakdown.
+Date overrides and manual fixtures are available through the CLI, not the web UI
+or prediction request schema.
+
+Web predictions do not append to the history CSV. Run `python -m main predict`
+to record picks and `python -m main --updateresults --all` after games finish;
+reload `/stats` to see the updated records. ROI uses fixed 1.41 odds, not settled
+wager prices. The health endpoint does not check models or NBA service access.
 
 The web service can reuse cached season data without the CLI's initial refresh.
 Refresh data explicitly when needed:
@@ -207,7 +268,9 @@ python -c "from src.nba_data_manager import NBADataManager; NBADataManager().upd
 ```
 
 Loaded pipelines are cached in the web process. Restart the server after replacing
-model files. The interface does not train models or settle prediction results.
+model files. The interface does not train models, settle prediction results, or
+edit season configuration. See the [README webapp reference](../README.md#webapp)
+for API usage, response details, and [Docker instructions](../README.md#docker).
 
 ## Troubleshooting
 

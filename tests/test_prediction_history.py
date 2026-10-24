@@ -5,10 +5,6 @@ Tests for src/prediction/history.py
 """
 
 import pytest
-import json
-import os
-from datetime import datetime
-from unittest.mock import Mock, patch, mock_open
 
 from src.prediction.history import get_confidence_tier, save_predictions_to_history
 
@@ -85,66 +81,52 @@ class TestSavePredictionsToHistory:
             }
         ]
     
-    @patch('src.prediction.history.get_eastern_date')
-    @patch('pandas.DataFrame.to_csv')
-    @patch('os.path.exists')
-    def test_creates_new_history_file(self, mock_exists, mock_to_csv, mock_date, sample_predictions):
-        """Test creating new history file"""
-        mock_exists.return_value = False
-        mock_date.return_value = '2024-03-15'
-        
+    @pytest.fixture(autouse=True)
+    def temporary_history(self, tmp_path, monkeypatch):
+        from src.prediction import history
+        self.path = tmp_path / 'history.csv'
+        monkeypatch.setattr(history, 'PREDICTION_HISTORY_FILE', str(self.path))
+        monkeypatch.setattr(history, 'get_eastern_date', lambda: '2024-03-15')
+
+    def test_creates_new_history_file(self, sample_predictions):
+        from src.history_store import read_history
         save_predictions_to_history(sample_predictions)
-        
-        mock_to_csv.assert_called_once()
-    
-    @patch('src.prediction.history.get_eastern_date')
-    @patch('pandas.DataFrame.to_csv')
-    @patch('pandas.read_csv')
-    @patch('os.path.exists')
-    def test_appends_to_existing_file(self, mock_exists, mock_read_csv, mock_to_csv, mock_date, sample_predictions):
-        """Test appending to existing history file"""
-        import pandas as pd
-        
-        mock_exists.return_value = True
-        mock_date.return_value = '2024-03-15'
-        mock_read_csv.return_value = pd.DataFrame({
-            'date': ['2024-03-14'],
-            'away_team': ['Bulls'],
-            'home_team': ['Pistons'],
-            'predicted_winner': ['Pistons'],
-            'confidence': [0.25],
-            'tier': ['MODERATE'],
-            'home_win_prob': [0.6],
-            'model_agreement': [0.7],
-            'result': [None]
-        })
-        
+        saved = read_history(self.path)
+        assert len(saved.rows) == 2
+        assert saved.rows[0]['date'] == '2024-03-15'
+        assert saved.rows[0]['winner'] == saved.rows[0]['correct'] == ''
+
+    def test_appends_to_existing_file(self, sample_predictions):
+        from src.history_store import read_history
+        old = (b'date,away_team,home_team,prediction,winner,confidence,home_win_prob,model_agreement,tier,correct\r\n'
+               b'2024-03-14,Bulls,Pistons,Pistons,Pistons,0.250,0.600,0.700,MODERATE,1.0\r\n')
+        self.path.write_bytes(old)
+        previous = read_history(self.path)
         save_predictions_to_history(sample_predictions)
-        
-        mock_to_csv.assert_called_once()
-    
-    @patch('src.prediction.history.get_eastern_date')
-    def test_empty_predictions_list(self, mock_date):
-        """Test with empty predictions list"""
-        mock_date.return_value = '2024-03-15'
-        
-        # Should handle empty list gracefully (may do nothing or raise)
-        try:
-            save_predictions_to_history([])
-        except Exception:
-            pass  # Empty list handling varies
-    
-    @patch('src.prediction.history.get_eastern_date')
-    @patch('pandas.DataFrame.to_csv')
-    @patch('os.path.exists')
-    def test_custom_date_string(self, mock_exists, mock_to_csv, mock_date, sample_predictions):
-        """Test with custom date string"""
-        mock_exists.return_value = False
-        
+        saved = read_history(self.path)
+        assert len(saved.rows) == 3
+        assert {col: saved.rows[0][col] for col in previous.columns} == previous.rows[0]
+        assert self.path.with_name('history.csv.bak').read_bytes() == old
+
+    def test_empty_predictions_list(self):
+        save_predictions_to_history([])
+        assert not self.path.exists()
+
+    def test_custom_date_string(self, sample_predictions):
+        from src.history_store import read_history
         save_predictions_to_history(sample_predictions, date_str='2024-01-01')
-        
-        # Should not call get_eastern_date when date_str is provided
-        mock_to_csv.assert_called_once()
+        saved = read_history(self.path)
+        assert all(row['date'] == '2024-01-01' for row in saved.rows)
+        assert saved.columns == ['date', 'away_team', 'home_team', 'prediction', 'winner',
+                                 'confidence', 'home_win_prob', 'model_agreement', 'tier', 'correct']
+
+    def test_duplicates_leave_file_byte_identical(self, sample_predictions):
+        save_predictions_to_history(sample_predictions)
+        original = self.path.read_bytes()
+        # A later prediction of the same games must never clear their outcomes.
+        save_predictions_to_history(sample_predictions + sample_predictions)
+        assert self.path.read_bytes() == original
+        assert not self.path.with_name('history.csv.bak').exists()
 
 
 class TestConfidenceTierValues:

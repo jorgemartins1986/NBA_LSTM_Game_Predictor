@@ -46,12 +46,10 @@ def test_web_prediction_exposes_history_counts_without_network(monkeypatch):
     monkeypatch.setattr(service, '_load_pipeline', lambda _: pipeline)
     monkeypatch.setattr(service, 'fetch_season_games', lambda **_: current)
     monkeypatch.setattr(service, 'load_prediction_history', lambda *_, **__: raw)
-    monkeypatch.setattr(service, 'get_current_season', lambda: '2025-26')
     monkeypatch.setattr(service, 'get_todays_games', lambda **_: (
         [{'home_team_id': 1, 'away_team_id': 2}], '2025-10-20', False))
     monkeypatch.setattr(service.teams, 'get_teams', lambda: [
         {'id': 1, 'full_name': 'AAA'}, {'id': 2, 'full_name': 'BBB'}])
-    monkeypatch.setattr(service, 'get_live_standings', lambda **_: {})
     monkeypatch.setattr(service, 'get_live_odds', lambda **_: {})
     monkeypatch.setattr(service, 'match_game_to_odds', lambda *_: None)
     result = service.run_todays_predictions()
@@ -67,11 +65,11 @@ def test_cli_passes_prediction_date_and_history_to_feature_builder(monkeypatch):
     current = games('2025-26', '2025-10-01', 1)
     monkeypatch.setattr(predict, 'ModelLoader', lambda: SimpleNamespace(load_ensemble=lambda **_: None))
     monkeypatch.setattr(predict, 'PredictionPipeline', lambda _: None)
+    monkeypatch.setattr(predict, 'validate_historical_model', lambda *_: {})
+    monkeypatch.setattr(predict, 'historical_standings', lambda *_: {})
     monkeypatch.setattr(NBADataManager, 'update_current_season', lambda _: None)
     monkeypatch.setattr(predict, 'fetch_season_games', lambda **_: current)
-    monkeypatch.setattr(predict, 'get_current_season', lambda: '2025-26')
     monkeypatch.setattr(predict, 'load_prediction_history', lambda *_: current)
-    monkeypatch.setattr(predict, 'get_live_standings', lambda: {})
     monkeypatch.setattr(predict, 'get_live_odds', lambda: {})
     monkeypatch.setattr(predict.teams, 'get_teams', lambda: [
         {'id': 1, 'full_name': 'AAA'}, {'id': 2, 'full_name': 'BBB'}])

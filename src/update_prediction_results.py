@@ -14,6 +14,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from nba_api.stats.static import teams
 from .paths import PREDICTION_HISTORY_FILE, GAMES_CACHE_FILE
+from .history_store import read_history, write_history
 from .prediction.nba_data import _fetch_nba_stats, _result_set_to_df, get_current_season
 import os
 import sys
@@ -452,7 +453,15 @@ def update_results(date_str=None, update_all=False):
         return
     
     # Load history
-    df = pd.read_csv(PREDICTION_HISTORY_FILE)
+    snapshot = read_history(PREDICTION_HISTORY_FILE)
+    df = pd.DataFrame(snapshot.rows, columns=snapshot.columns)
+    # Work with numeric values as before. Keep the original cells separately
+    # so saving results does not reformat unrelated historical records.
+    for column in ('correct', 'confidence', 'home_win_prob', 'model_agreement'):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors='raise')
+    df['correct'] = df['correct'].astype(float)
+    saved_rows = [dict(row) for row in snapshot.rows]
     print(f"📋 Loaded {len(df)} prediction records")
     
     # Determine which dates to update
@@ -473,6 +482,7 @@ def update_results(date_str=None, update_all=False):
     
     # Update each date
     total_updated = 0
+    result_updates = set()
     for date in sorted(dates_to_update):
         print(f"\n📅 Updating results for {date}...")
         
@@ -497,6 +507,9 @@ def update_results(date_str=None, update_all=False):
                 
                 df.at[idx, 'winner'] = winner
                 df.at[idx, 'correct'] = correct
+                saved_rows[idx]['winner'] = winner
+                saved_rows[idx]['correct'] = float(correct)
+                result_updates.update({(idx, 'winner'), (idx, 'correct')})
                 updated_count += 1
                 
                 status = "✅" if correct == 1 else "❌"
@@ -510,7 +523,8 @@ def update_results(date_str=None, update_all=False):
             time.sleep(0.5)
     
     # Save updated history
-    df.to_csv(PREDICTION_HISTORY_FILE, index=False)
+    if total_updated:
+        write_history(snapshot, snapshot.columns, saved_rows, result_updates=result_updates)
     print(f"\n💾 Saved {total_updated} updates to {PREDICTION_HISTORY_FILE}")
     
     # Show summary stats
@@ -532,7 +546,11 @@ def show_stats(df=None):
         print("\n📊 No completed predictions yet.")
         return
     
-    completed['correct'] = completed['correct'].astype(int)
+    # Accept numeric outcomes and decimal representations such as "1.0".
+    completed['correct'] = pd.to_numeric(completed['correct'], errors='raise').astype(int)
+    for column in ('confidence', 'model_agreement'):
+        if column in completed.columns:
+            completed[column] = pd.to_numeric(completed[column], errors='coerce')
     
     print("\n" + "="*60)
     print("PREDICTION HISTORY STATISTICS")
